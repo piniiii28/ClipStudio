@@ -18,7 +18,7 @@ import traceback
 from pathlib import Path
 from typing import Callable
 
-from . import config, db, importer, media, reframe, subtitles, suggest, transcribe
+from . import config, cortes, db, fondos_remotos, importer, media, reframe, subtitles, suggest, transcribe
 from .media import Cancelacion, Cancelado, ErrorMedia
 
 log = logging.getLogger("clipstudio")
@@ -58,10 +58,11 @@ def preferencias_clip() -> dict:
     return {
         "estilo": subtitles.estilo_para_preferencia(pref.get("estilo")),
         "encuadre": encuadre if encuadre in ENCUADRES else "rellenar",
+        "composicion": pref.get("composicion") or {},
     }
 
 
-ENCUADRES = ("rellenar", "ajustar", "dividido")
+ENCUADRES = ("rellenar", "ajustar", "dividido", "stream")
 EXTENSIONES_FONDO = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
 
 
@@ -75,28 +76,59 @@ def listar_fondos() -> list[Path]:
     )
 
 
-def _fondo_para(estilo: dict) -> Path:
-    """El fondo elegido en el estilo si existe; si no, uno al azar de la carpeta de fondos."""
-    elegido = estilo.get("fondo_juego")
-    if elegido and (config.FONDOS_DIR / elegido).is_file():
-        return config.FONDOS_DIR / elegido
-    fondos = listar_fondos()
-    if not fondos:
-        raise ErrorMedia(
-            "No hay videos de fondo. Añade alguno en la carpeta de fondos "
-            "(pestaña Encuadre y estilo → Abrir carpeta de fondos)."
-        )
-    return random.choice(fondos)
+def _elegir_fondo(estilo: dict) -> dict:
+    """Decide el fondo de la exportacion SIN descargar nada.
+
+    Devuelve {"ruta": Path, "credito": ""} para un fondo local o
+    {"remoto": {...}, "credito": "Fondo: ... (YouTube)"} para uno de YouTube.
+    Si el elegido no existe (o es "al azar"): uno local al azar y, si no hay locales, uno
+    remoto visible al azar.
+    """
+    elegido = estilo.get("fondo_juego") or ""
+    if elegido.startswith(subtitles.PREFIJO_FONDO_REMOTO):
+        remoto = fondos_remotos.buscar(elegido[len(subtitles.PREFIJO_FONDO_REMOTO):])
+        if remoto and not remoto["oculto"]:
+            return {"remoto": remoto, "credito": remoto["credito"]}
+    elif elegido and (config.FONDOS_DIR / elegido).is_file():
+        return {"ruta": config.FONDOS_DIR / elegido, "credito": ""}
+    locales = listar_fondos()
+    if locales:
+        return {"ruta": random.choice(locales), "credito": ""}
+    remotos = fondos_remotos.visibles()
+    if remotos:
+        remoto = random.choice(remotos)
+        return {"remoto": remoto, "credito": remoto["credito"]}
+    raise ErrorMedia(
+        "No hay videos de fondo. Añade alguno en la carpeta de fondos o elige uno de YouTube "
+        "(pestaña Encuadre y estilo → Video de fondo)."
+    )
+
+
+def _preparar_fondo(fondo: dict, duracion_clip: float, trabajo: Path, cancel: Cancelacion,
+                    progreso: Callable[[float], None]) -> tuple[Path, float]:
+    """Archivo de video del fondo y segundo desde el que usarlo. Un fondo remoto baja solo su tramo."""
+    if "remoto" in fondo:
+        return fondos_remotos.obtener_tramo(fondo["remoto"], duracion_clip, trabajo, cancel, progreso)
+    juego = fondo["ruta"]
+    duracion_fondo = media.sondear(juego)["duracion"]
+    # Cada exportacion empieza el juego en un punto distinto del video de fondo.
+    return juego, random.uniform(0, max(0.0, duracion_fondo - duracion_clip))
 
 
 def _nuevo_clip(proyecto: dict, segmentos: list[dict], pref: dict, inicio: float, fin: float,
                 titulo: str, origen: str, motivos: list[str], detectar_rostro: bool = True) -> dict:
     """Inserta un clip con subtitulos generados y, si procede, el recorte centrado en el rostro."""
     proxy = ruta_proxy(proyecto["id"])
-    recorte = reframe.detectar_recorte(proxy, inicio, fin) if detectar_rostro and proxy.is_file() else None
+    datos_stream = proyecto.get("encuadre_vivo") or (pref.get("composicion") if pref["encuadre"] == "stream" else None)
+    composicion = reframe.normalizar_composicion(datos_stream) if datos_stream else {}
+    necesita_rostro = not composicion
+    seguimiento = reframe.detectar_seguimiento(proxy, inicio, fin) if detectar_rostro and necesita_rostro and proxy.is_file() else None
+    if composicion:
+        if composicion["camara"] is None and composicion["modo"] != "gameplay" and detectar_rostro and proxy.is_file():
+            composicion["camara"] = reframe.detectar_camara(proxy, inicio, fin)
     motivos = list(motivos)
-    if recorte is not None and origen != "manual":
-        motivos.append("Encuadre centrado en el rostro detectado")
+    if seguimiento is not None and origen != "manual":
+        motivos.append("Encuadre con seguimiento del rostro detectado")
     return db.insertar(
         "clips",
         {
@@ -104,8 +136,11 @@ def _nuevo_clip(proyecto: dict, segmentos: list[dict], pref: dict, inicio: float
             "titulo": titulo,
             "inicio": round(inicio, 3),
             "fin": round(fin, 3),
-            "encuadre": pref["encuadre"],
-            "recorte_x": 0.5 if recorte is None else recorte,
+            "cortes": [],
+            "encuadre": "stream" if composicion else pref["encuadre"],
+            "composicion": composicion,
+            "recorte_x": seguimiento["recorte_x"] if seguimiento else 0.5,
+            "trayectoria": seguimiento["trayectoria"] if seguimiento else [],
             "subtitulos": subtitles.generar(segmentos, inicio, fin, pref["estilo"]),
             "estilo": dict(pref["estilo"]),
             "origen": origen,
@@ -143,19 +178,47 @@ class Gestor:
         self._por_borrar: set[str] = set()       # proyectos eliminados a la espera de quedar libres
         self._lock = threading.Lock()
         self._iniciado = False
+        self._hilos: list[threading.Thread] = []
+        self._cerrando = False
 
     def iniciar(self) -> None:
         if self._iniciado:
             return
         self._iniciado = True
+        self._cerrando = False
         for tipo in self._colas:
-            threading.Thread(target=self._bucle, args=(tipo,), daemon=True, name=f"cola-{tipo}").start()
+            hilo = threading.Thread(target=self._bucle, args=(tipo,), daemon=True, name=f"cola-{tipo}")
+            self._hilos.append(hilo)
+            hilo.start()
+
+    def cantidad_activos(self) -> int:
+        with self._lock:
+            return len(self._cancelaciones)
+
+    def detener(self, timeout: float = 12) -> None:
+        """Cancela subprocessos y despierta las colas antes de cerrar el servidor."""
+        with self._lock:
+            if not self._iniciado:
+                return
+            self._cerrando = True
+            cancelaciones = list(self._cancelaciones.values())
+        for cancel in cancelaciones:
+            cancel.cancelar()
+        for cola in self._colas.values():
+            cola.put(None)
+        limite = time.monotonic() + timeout
+        for hilo in self._hilos:
+            hilo.join(max(0, limite - time.monotonic()))
+        # Los pendientes cancelados no entran en _ejecutar; quedan recuperables al abrir.
+        if all(not h.is_alive() for h in self._hilos):
+            self._hilos.clear()
+            self._iniciado = False
 
     def encolar(self, tipo: str, id_: str) -> bool:
         """Devuelve False si ese id ya esta en cola o ejecutandose."""
         cancel = Cancelacion()
         with self._lock:
-            if id_ in self._cancelaciones:
+            if self._cerrando or id_ in self._cancelaciones:
                 return False
             self._cancelaciones[id_] = cancel
         self._colas[tipo].put((id_, cancel))
@@ -206,7 +269,10 @@ class Gestor:
         tabla = "proyectos" if tipo == "proyecto" else "exportaciones"
         funcion = procesar_proyecto if tipo == "proyecto" else exportar
         while True:
-            id_, cancel = self._colas[tipo].get()
+            entrada = self._colas[tipo].get()
+            if entrada is None:
+                return
+            id_, cancel = entrada
             try:
                 with self._lock:
                     if cancel.activa or self._cancelaciones.get(id_) is not cancel:
@@ -339,8 +405,16 @@ def procesar_proyecto(proyecto_id: str, cancel: Cancelacion) -> None:
     _paso(proyecto_id, "propuestas", "Buscando fragmentos...", p(94))
     actual = db.obtener("proyectos", proyecto_id)
     assert actual is not None
-    n = crear_propuestas(actual, transcripcion, actual.get("min_s") or 15, actual.get("max_s") or 60, cancel=cancel)
-    if not info["tiene_audio"]:
+    if actual.get("es_clip_vivo"):
+        if not db.listar("clips", "proyecto_id = ? AND origen = 'vivo'", (proyecto_id,)):
+            _nuevo_clip(actual, transcripcion["segmentos"], preferencias_clip(), 0, duracion,
+                        actual["nombre"], "vivo", ["Momento guardado del directo"])
+        n = 1
+    else:
+        n = crear_propuestas(actual, transcripcion, actual.get("min_s") or 15, actual.get("max_s") or 60, cancel=cancel)
+    if actual.get("es_clip_vivo"):
+        mensaje = "Listo. Momento del directo preparado para editar y exportar."
+    elif not info["tiene_audio"]:
         mensaje = "Listo. El video no tiene audio: no hay transcripcion ni subtitulos automaticos."
     elif not transcripcion["segmentos"]:
         mensaje = "Listo. No se detecto voz: crea los clips manualmente."
@@ -400,38 +474,57 @@ def exportar(exportacion_id: str, cancel: Cancelacion) -> None:
     if fuente is None or not fuente.is_file():
         raise ErrorMedia("No se encontro el video original del proyecto.")
     clip = exp["parametros"]
+    eliminados = clip.get("cortes") or []
+    inicio, fin = clip["inicio"], clip["fin"]
+    duracion = cortes.duracion_final(inicio, fin, eliminados)
+    conservar = [(a - inicio, b - inicio) for a, b in cortes.tramos_conservados(inicio, fin, eliminados)] if eliminados else None
     carpeta = carpeta_proyecto(proyecto["id"]) / "exportaciones"
     carpeta.mkdir(parents=True, exist_ok=True)
     trabajo = carpeta / f"{exportacion_id}.tmp"
     trabajo.mkdir(exist_ok=True)
     try:
         cues = subtitles.recortar(clip["subtitulos"], clip["inicio"], clip["fin"])
+        if eliminados:
+            cues = cortes.remapear_subtitulos(cues, inicio, fin, eliminados)
         estilo = subtitles.normalizar_estilo(clip["estilo"])
         archivo_ass = None
-        if subtitles.tiene_contenido(cues, estilo):
+        # El fondo se decide ya (no se descarga todavia) porque su credito va en los subtitulos.
+        fondo = _elegir_fondo(estilo) if clip["encuadre"] == "dividido" else None
+        credito = fondo["credito"] if fondo else ""
+        if subtitles.tiene_contenido(cues, estilo, credito):
             palabras = None
             if estilo["resaltar"]:
                 segmentos = leer_transcripcion(proyecto["id"])["segmentos"]
                 palabras = subtitles.palabras_en_rango(segmentos, clip["inicio"], clip["fin"])
+            if eliminados and palabras is not None:
+                palabras = cortes.remapear_palabras(palabras, inicio, eliminados)
             archivo_ass = trabajo / "subs.ass"
             archivo_ass.write_text(
-                subtitles.a_ass(cues, clip["inicio"], clip["fin"], estilo, palabras), encoding="utf-8"
+                subtitles.a_ass(cues, 0 if eliminados else inicio, duracion if eliminados else fin, estilo, palabras,
+                                **({"credito": credito} if credito else {})),
+                encoding="utf-8",
             )
-        juego, juego_inicio = None, 0.0
-        if clip["encuadre"] == "dividido":
-            juego = _fondo_para(estilo)
-            duracion_fondo = media.sondear(juego)["duracion"]
-            # Cada exportacion empieza el juego en un punto distinto del video de fondo.
-            juego_inicio = random.uniform(0, max(0.0, duracion_fondo - (clip["fin"] - clip["inicio"])))
         temporal = trabajo / "salida.mp4"
         prog = _Progreso("exportaciones", exportacion_id)
-        pista = media.sondear(fuente)["pista_video"]
+        juego, juego_inicio = None, 0.0
+        inicio_ffmpeg = 0.0
+        if fondo:
+            remoto = "remoto" in fondo
+            # Un fondo de YouTube usa el primer 15 % del progreso para bajar su tramo.
+            juego, juego_inicio = _preparar_fondo(fondo, clip["fin"] - clip["inicio"], trabajo, cancel,
+                                                  prog.tramo(0, 15))
+            inicio_ffmpeg = 15.0 if remoto else 0.0
+        info = media.sondear(fuente)
+        pista = info["pista_video"]
         media.exportar_clip(
             fuente, temporal, clip["inicio"], clip["fin"], clip["encuadre"], clip["recorte_x"],
-            archivo_ass, cancel, prog.tramo(0, 99), pista,
+            archivo_ass, cancel, prog.tramo(inicio_ffmpeg, 99), pista,
             estilo["color_fondo"] if estilo["fondo"] == "color" else None,
             juego=juego, juego_inicio=juego_inicio, proporcion_juego=estilo["juego_proporcion"],
             efecto_fondo=estilo["fondo"], difuminado=estilo["difuminado"],
+            conservar=conservar, tiene_audio=info["tiene_audio"],
+            trayectoria=clip.get("trayectoria") or [],
+            composicion=clip.get("composicion") or {},
         )
         final = carpeta / f"{exportacion_id}.mp4"
         temporal.replace(final)

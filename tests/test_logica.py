@@ -371,3 +371,53 @@ def test_estilo_de_fondo_se_valida():
 def test_claves_de_subtitulos_no_incluyen_gancho_ni_encuadre():
     assert set(subtitles.CLAVES_SUBTITULOS) <= set(subtitles.ESTILO_BASE)
     assert not {"titulo_gancho", "fondo", "fondo_juego", "juego_proporcion"} & set(subtitles.CLAVES_SUBTITULOS)
+
+
+def test_marca_se_valida_y_recorta_a_40():
+    e = subtitles.normalizar_estilo({"marca": "  @mi   canal  " + "x" * 50, "marca_posicion": "centro"})
+    assert e["marca"] == ("@mi canal " + "x" * 50)[:40] and len(e["marca"]) == 40
+    assert e["marca_posicion"] == "abajo_derecha"
+    assert subtitles.normalizar_estilo({"marca_posicion": "arriba_derecha"})["marca_posicion"] == "arriba_derecha"
+
+
+def test_marca_limites_de_tamano_y_opacidad():
+    e = subtitles.normalizar_estilo({"marca_tamano": 500, "marca_opacidad": 0})
+    assert e["marca_tamano"] == 80 and e["marca_opacidad"] == 10
+    e = subtitles.normalizar_estilo({"marca_tamano": 1, "marca_opacidad": 999})
+    assert e["marca_tamano"] == 16 and e["marca_opacidad"] == 100
+
+
+def test_ass_marca_dura_todo_el_clip_en_la_esquina():
+    ass = subtitles.a_ass([], 0, 30, {"marca": "@micanal", "marca_posicion": "abajo_derecha", "marca_opacidad": 70})
+    lineas = [l for l in ass.splitlines() if ",Marca," in l]
+    assert len(lineas) == 1
+    assert lineas[0].startswith("Dialogue: 2,0:00:00.00,0:00:30.00,Marca,")
+    assert r"\an3\pos(1040,1880)\alpha&H4D&}@micanal" in lineas[0]
+    assert r"\alpha&H00&" in subtitles.a_ass([], 0, 30, {"marca": "x", "marca_opacidad": 100})
+
+
+def test_ass_marca_otras_esquinas():
+    esquinas = {
+        "arriba_izquierda": r"\an7\pos(40,40)",
+        "arriba_derecha": r"\an9\pos(1040,40)",
+        "abajo_izquierda": r"\an1\pos(40,1880)",
+    }
+    for posicion, etiqueta in esquinas.items():
+        ass = subtitles.a_ass([], 0, 10, {"marca": "x", "marca_posicion": posicion})
+        linea = [l for l in ass.splitlines() if ",Marca," in l][0]
+        assert etiqueta in linea
+
+
+def test_ass_marca_saneada_sin_llaves():
+    ass = subtitles.a_ass([], 0, 10, {"marca": r"{\b1}hola"})
+    linea = [l for l in ass.splitlines() if ",Marca," in l][0]
+    assert linea.endswith("}(/b1)hola") and linea.count("{") == 1
+    assert r"{\b1}" not in linea
+
+
+def test_marca_cuenta_como_contenido_y_es_preferencia():
+    assert subtitles.tiene_contenido([], {"marca": "x"})
+    assert not subtitles.tiene_contenido([], {"marca": ""})
+    pref = subtitles.estilo_para_preferencia({"marca": "@micanal", "marca_posicion": "arriba_izquierda"})
+    assert pref["marca"] == "@micanal" and pref["marca_posicion"] == "arriba_izquierda"
+    assert "marca" not in subtitles.CLAVES_SUBTITULOS and "marca" not in subtitles.SOLO_DEL_CLIP

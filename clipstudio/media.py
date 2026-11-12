@@ -9,7 +9,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable
 
-from . import config
+from . import config, reframe
 
 Progreso = Callable[[float], None]
 
@@ -197,24 +197,69 @@ def crear_proxy(
     )
 
 
+def filtro_stream(composicion: dict | None, pista_video: int = 0) -> str:
+    c = reframe.normalizar_composicion(composicion)
+    w, h = config.OUT_W, config.OUT_H
+
+    def recortar(region: dict) -> str:
+        # Dimensiones y posiciones pares para H.264 y fuentes YUV 4:2:0.
+        return (f"crop=w='max(2,trunc(iw*{region['ancho']:.6f}/2)*2)':"
+                f"h='max(2,trunc(ih*{region['alto']:.6f}/2)*2)':"
+                f"x='trunc(iw*{region['x']:.6f}/2)*2':y='trunc(ih*{region['y']:.6f}/2)*2'")
+
+    camara = c["camara"]
+    if c["modo"] == "camara" and camara:
+        return (f"[0:v:{pista_video}]{recortar(camara)},scale={w}:{h}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h}:(iw-{w})/2:(ih-{h})*.25,setsar=1[v0]")
+    mixto = c["modo"] == "mixto" and camara is not None
+    alto_camara = int(h * c["camara_porcentaje"] / 100) // 2 * 2 if mixto else 0
+    alto_juego = h - alto_camara
+    entrada = f"[0:v:{pista_video}]"
+    prefijo = ""
+    if mixto:
+        prefijo = entrada + "split=2[sc][sj];"
+        prefijo += (f"[sc]{recortar(camara)},scale={w}:{alto_camara}:force_original_aspect_ratio=increase,"
+                    f"crop={w}:{alto_camara}:(iw-{w})/2:(ih-{alto_camara})*.25,setsar=1[camara];")
+        entrada = "[sj]"
+    grafo = prefijo + (
+        f"{entrada}{recortar(c['juego'])},split=2[gb][gf];"
+        f"[gb]scale={w}:{alto_juego}:force_original_aspect_ratio=increase,crop={w}:{alto_juego},boxblur=24:2[bg];"
+        f"[gf]scale={w}:{alto_juego}:force_original_aspect_ratio=decrease[fg];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[juego]"
+    )
+    if mixto:
+        return grafo + ";[camara][juego]vstack=inputs=2[v0]"
+    return grafo + ";[juego]null[v0]"
+
+
 def filtro_encuadre(
     encuadre: str, recorte_x: float, con_subtitulos: bool, archivo_ass: str = "subs.ass", pista_video: int = 0,
     color_fondo: str | None = None,
     proporcion_juego: int = 45,
     efecto_fondo: str = "difuminado",
     difuminado: int = 24,
+    conservar: list[tuple[float, float]] | None = None,
+    trayectoria: list[dict] | None = None,
+    inicio: float = 0,
+    composicion: dict | None = None,
 ) -> str:
     """Construye el filter_complex para una salida vertical 9:16."""
     w, h = config.OUT_W, config.OUT_H
     x = max(0.0, min(1.0, float(recorte_x)))
-    if encuadre == "dividido":
+    posicion = f"(iw-{w})*{x:.4f}"
+    if trayectoria:
+        centro = reframe.expresion_centro(trayectoria, inicio)
+        posicion = f"'max(0,min(iw-{w},iw*({centro})-{w}/2))'"
+    if encuadre == "stream":
+        grafo = filtro_stream(composicion, pista_video)
+    elif encuadre == "dividido":
         # Video del clip arriba y video de juego (entrada 1) abajo. Las alturas son pares.
         prop = max(25, min(60, int(proporcion_juego)))
         hb = int(h * prop / 100) // 2 * 2
         ht = h - hb
         grafo = (
             f"[0:v:{pista_video}]scale={w}:{ht}:force_original_aspect_ratio=increase,"
-            f"crop={w}:{ht}:(iw-{w})*{x:.4f}:(ih-{ht})/2,setsar=1[top];"
+            f"crop={w}:{ht}:{posicion}:(ih-{ht})/2,setsar=1[top];"
             f"[1:v:0]scale={w}:{hb}:force_original_aspect_ratio=increase,crop={w}:{hb},setsar=1[bot];"
             f"[top][bot]vstack=inputs=2[v0]"
         )
@@ -237,13 +282,26 @@ def filtro_encuadre(
     else:
         grafo = (
             f"[0:v:{pista_video}]scale={w}:{h}:force_original_aspect_ratio=increase,"
-            f"crop={w}:{h}:(iw-{w})*{x:.4f}:(ih-{h})/2,setsar=1[v0]"
+            f"crop={w}:{h}:{posicion}:(ih-{h})/2,setsar=1[v0]"
         )
+    if conservar is not None:
+        expresion = _seleccion(conservar)
+        # fps fija una base conocida incluso con fuentes VFR; N/30 no depende de FRAME_RATE.
+        filtro = f"fps=30,select='{expresion}',setpts=N/30/TB"
+        if encuadre == "dividido":
+            grafo = grafo.replace("setsar=1[top]", f"setsar=1,{filtro}[top]", 1)
+        else:
+            grafo = grafo.replace("[v0]", "[pre]", 1)
+            grafo += f";[pre]{filtro}[v0]"
     if con_subtitulos:
         grafo += f";[v0]subtitles={archivo_ass}[v]"
     else:
         grafo += ";[v0]null[v]"
     return grafo
+
+
+def _seleccion(conservar: list[tuple[float, float]]) -> str:
+    return "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in conservar)
 
 
 def exportar_clip(
@@ -263,6 +321,10 @@ def exportar_clip(
     proporcion_juego: int = 45,
     efecto_fondo: str = "difuminado",
     difuminado: int = 24,
+    conservar: list[tuple[float, float]] | None = None,
+    tiene_audio: bool = True,
+    trayectoria: list[dict] | None = None,
+    composicion: dict | None = None,
 ) -> None:
     """Corta [inicio, fin], reencuadra a 1080x1920, quema subtitulos y codifica H.264 + AAC."""
     duracion = fin - inicio
@@ -277,15 +339,23 @@ def exportar_clip(
     if encuadre == "dividido":
         # El juego se repite en bucle; el -t de salida corta la salida. Su audio no se mapea.
         entradas += ["-stream_loop", "-1", "-ss", f"{juego_inicio:.3f}", "-i", str(juego)]
+    if conservar == [(0, duracion)] or conservar == [[0, duracion]]:
+        conservar = None
+    duracion_salida = sum(b - a for a, b in conservar) if conservar is not None else duracion
     grafo = filtro_encuadre(
         encuadre, recorte_x, archivo_ass is not None, archivo_ass.name if archivo_ass else "",
-        pista_video, color_fondo, proporcion_juego, efecto_fondo, difuminado,
+        pista_video, color_fondo, proporcion_juego, efecto_fondo, difuminado, conservar,
+        trayectoria, inicio, composicion,
     )
+    audio = "0:a:0?"
+    if conservar is not None and tiene_audio:
+        grafo += f";[0:a:0]aselect='{_seleccion(conservar)}',asetpts=N/SR/TB[a]"
+        audio = "[a]"
     ejecutar_ffmpeg(
         [*entradas,
-         "-filter_complex", grafo, "-map", "[v]", "-map", "0:a:0?",
+         "-filter_complex", grafo, "-map", "[v]", "-map", audio,
          "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
          "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-movflags", "+faststart",
-         "-t", f"{duracion:.3f}", str(destino)],
-        duracion, cancel, progreso, cwd=cwd,
+         "-t", f"{duracion_salida:.3f}", str(destino)],
+        duracion_salida, cancel, progreso, cwd=cwd,
     )

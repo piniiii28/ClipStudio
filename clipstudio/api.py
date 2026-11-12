@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 import os
 import re
 import shutil
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
@@ -17,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, config, db, importer, pipeline, reframe, subtitles, suggest
+from . import __version__, actualizaciones, config, cortes, db, fondos_remotos, hashtags, importer, pipeline, reframe, subtitles, suggest, vivo
 from .pipeline import gestor
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -33,10 +34,33 @@ async def _ciclo(_: FastAPI):
     db.marcar_interrumpidos()
     pipeline.limpiar_huerfanos()
     gestor.iniciar()
-    yield
+    vivo.recuperar()
+    actualizaciones.iniciar_en_segundo_plano()   # en un hilo: no retrasa el arranque
+    try:
+        yield
+    finally:
+        vivo.detener_todo()
+        gestor.detener()
+        actualizaciones.lanzar_instalador_pendiente()   # solo si la persona pulso «Instalar y reiniciar»
 
 
 app = FastAPI(title="ClipStudio", version=__version__, lifespan=_ciclo, docs_url=None, redoc_url=None)
+
+
+@app.post("/api/escritorio/cerrar", status_code=204)
+def cerrar_escritorio(request: Request):
+    # Solo el proceso de escritorio que creo este servidor puede detenerlo.
+    token = getattr(app.state, "desktop_token", None)
+    if not token or not secrets.compare_digest(request.headers.get("X-ClipStudio-Token", ""), token):
+        raise HTTPException(403, "Cierre no autorizado.")
+    app.state.desktop_shutdown()
+
+
+@app.get("/api/escritorio/actividad")
+def actividad_escritorio():
+    sesion = vivo.sesion_actual()
+    return {"grabando": bool(sesion and sesion.estado in ("conectando", "grabando")),
+            "trabajos": gestor.cantidad_activos()}
 
 
 def _host(valor: str) -> str:
@@ -90,6 +114,7 @@ def _clip(cid: str) -> dict:
         raise HTTPException(404, "El clip no existe.")
     # Los clips guardados con una version anterior no tienen las claves de estilo nuevas.
     c["estilo"] = subtitles.normalizar_estilo(c["estilo"])
+    c["cortes"] = c.get("cortes") or []
     return c
 
 
@@ -112,6 +137,7 @@ def _detalle(pid: str) -> dict:
     p["clips"] = db.listar("clips", "proyecto_id = ?", (pid,), "inicio ASC")
     for c in p["clips"]:
         c["estilo"] = subtitles.normalizar_estilo(c["estilo"])
+        c["cortes"] = c.get("cortes") or []
     p["exportaciones"] = db.listar("exportaciones", "proyecto_id = ?", (pid,))
     for e in p["exportaciones"]:
         e.pop("parametros", None)
@@ -392,6 +418,7 @@ def aplicar_estilo(pid: str, datos: AplicarEstilo) -> dict:
             campos = {"estilo": subtitles.normalizar_estilo({**c["estilo"], **cambio})}
             if datos.que == "todo":
                 campos["encuadre"] = origen["encuadre"]
+                campos["composicion"] = origen.get("composicion") or {}
             db.actualizar("clips", c["id"], **campos)
             aplicados += 1
     detalle = _detalle(pid)
@@ -409,6 +436,7 @@ def ver_preferencias() -> dict:
 class Preferencias(BaseModel):
     estilo: dict[str, Any]
     encuadre: str = "rellenar"
+    composicion: dict | None = None
 
 
 @app.put("/api/preferencias/clip")
@@ -416,8 +444,12 @@ def guardar_preferencias(datos: Preferencias) -> dict:
     """Guarda el estilo y el encuadre con los que naceran los clips nuevos."""
     if datos.encuadre not in pipeline.ENCUADRES:
         raise HTTPException(422, "Encuadre no valido.")
+    try:
+        composicion = reframe.normalizar_composicion(datos.composicion) if datos.encuadre == "stream" else {}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     db.guardar_preferencia(
-        "clip", {"estilo": subtitles.estilo_para_preferencia(datos.estilo), "encuadre": datos.encuadre}
+        "clip", {"estilo": subtitles.estilo_para_preferencia(datos.estilo), "encuadre": datos.encuadre, "composicion": composicion}
     )
     return pipeline.preferencias_clip()
 
@@ -451,14 +483,35 @@ def crear_clip(pid: str, datos: ClipNuevo) -> dict:
     )
 
 
+class TikTokPublicacion(BaseModel):
+    contexto: str = Field("", max_length=200)
+    texto: str = Field("", max_length=1000)
+
+
+class HashtagsSolicitud(BaseModel):
+    contexto: str = Field("", max_length=200)
+
+
+@app.post("/api/clips/{cid}/hashtags")
+def sugerir_hashtags(cid: str, datos: HashtagsSolicitud) -> dict:
+    clip = _clip(cid)
+    proyecto = _proyecto(clip["proyecto_id"])
+    segmentos = pipeline.leer_transcripcion(proyecto["id"])["segmentos"]
+    return hashtags.sugerir(clip, proyecto, segmentos, datos.contexto)
+
+
 class ClipCambios(BaseModel):
     titulo: str | None = Field(None, max_length=120)
     inicio: float | None = Field(None, ge=0)
     fin: float | None = Field(None, gt=0)
     encuadre: str | None = None
     recorte_x: float | None = Field(None, ge=0, le=1)
+    seguimiento: Literal[False] | None = None
+    cortes: list[dict] | None = None
     subtitulos: list[dict[str, Any]] | None = None
     estilo: dict[str, Any] | None = None
+    composicion: dict | None = None
+    tiktok: TikTokPublicacion | None = None
 
 
 @app.patch("/api/clips/{cid}")
@@ -466,6 +519,13 @@ def editar_clip(cid: str, datos: ClipCambios) -> dict:
     clip = _clip(cid)
     p = _proyecto(clip["proyecto_id"])
     cambios: dict[str, Any] = {}
+    if datos.tiktok is not None:
+        cambios["tiktok"] = datos.tiktok.model_dump()
+    if datos.composicion is not None:
+        try:
+            cambios["composicion"] = reframe.normalizar_composicion(datos.composicion)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     if datos.titulo is not None:
         cambios["titulo"] = datos.titulo.strip() or clip["titulo"]
     if datos.encuadre is not None:
@@ -474,18 +534,31 @@ def editar_clip(cid: str, datos: ClipCambios) -> dict:
         cambios["encuadre"] = datos.encuadre
     if datos.recorte_x is not None:
         cambios["recorte_x"] = round(datos.recorte_x, 4)
+        cambios["trayectoria"] = []
+    if datos.seguimiento is False:
+        cambios["trayectoria"] = []
     estilo = clip["estilo"]
     if datos.estilo is not None:
         estilo = cambios["estilo"] = subtitles.normalizar_estilo({**clip["estilo"], **datos.estilo})
     inicio, fin = clip["inicio"], clip["fin"]
     cambio_rango = datos.inicio is not None or datos.fin is not None
     if cambio_rango:
+        cambios["trayectoria"] = []
         inicio, fin = _validar_rango(
             clip["inicio"] if datos.inicio is None else datos.inicio,
             clip["fin"] if datos.fin is None else datos.fin,
             p["duracion"],
         )
         cambios.update(inicio=inicio, fin=fin)
+    if datos.cortes is not None or cambio_rango:
+        try:
+            cambios["cortes"] = cortes.normalizar(
+                clip["cortes"] if datos.cortes is None else datos.cortes, inicio, fin
+            )
+        except ValueError as exc:
+            if datos.cortes is not None:
+                raise HTTPException(422, str(exc)) from exc
+            cambios["cortes"] = []
     if datos.subtitulos is not None:
         try:
             cues = subtitles.validar(datos.subtitulos, p["duracion"])
@@ -496,6 +569,25 @@ def editar_clip(cid: str, datos: ClipCambios) -> dict:
         segmentos = pipeline.leer_transcripcion(p["id"])["segmentos"]
         cambios["subtitulos"] = subtitles.sincronizar(clip["subtitulos"], segmentos, inicio, fin, estilo)
     db.actualizar("clips", cid, **cambios)
+    return _clip(cid)
+
+
+class QuitarSilencios(BaseModel):
+    minimo_s: float = Field(0.6, ge=0.3, le=3)
+
+
+@app.post("/api/clips/{cid}/quitar-silencios")
+def quitar_silencios(cid: str, datos: QuitarSilencios = QuitarSilencios()) -> dict:
+    clip = _clip(cid)
+    segmentos = pipeline.leer_transcripcion(clip["proyecto_id"])["segmentos"]
+    if not any(s.get("palabras") for s in segmentos):
+        raise HTTPException(409, "El proyecto no tiene transcripcion con palabras para detectar silencios.")
+    nuevos = cortes.silencios(segmentos, clip["inicio"], clip["fin"], datos.minimo_s)
+    try:
+        fusionados = cortes.normalizar(clip["cortes"] + nuevos, clip["inicio"], clip["fin"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    db.actualizar("clips", cid, cortes=fusionados)
     return _clip(cid)
 
 
@@ -513,15 +605,28 @@ def regenerar_subtitulos(cid: str) -> dict:
     return _clip(cid)
 
 
+@app.post("/api/clips/{cid}/camara-auto")
+def camara_auto(cid: str) -> dict:
+    clip = _clip(cid)
+    region = reframe.detectar_camara(pipeline.ruta_proxy(clip["proyecto_id"]), clip["inicio"], clip["fin"])
+    if region is None:
+        return {"detectado": False, "clip": clip}
+    composicion = reframe.normalizar_composicion(clip.get("composicion"))
+    composicion["camara"] = region
+    db.actualizar("clips", cid, composicion=composicion, encuadre="stream")
+    return {"detectado": True, "clip": _clip(cid)}
+
+
 @app.post("/api/clips/{cid}/encuadre-auto")
 def encuadre_auto(cid: str) -> dict:
     clip = _clip(cid)
-    recorte = reframe.detectar_recorte(pipeline.ruta_proxy(clip["proyecto_id"]), clip["inicio"], clip["fin"])
-    if recorte is None:
+    seguimiento = reframe.detectar_seguimiento(pipeline.ruta_proxy(clip["proyecto_id"]), clip["inicio"], clip["fin"])
+    if seguimiento is None:
         return {"detectado": False, "clip": clip}
     # Con el encuadre dividido se conserva el tipo: solo cambia la posicion horizontal.
     encuadre = "dividido" if clip["encuadre"] == "dividido" else "rellenar"
-    db.actualizar("clips", cid, recorte_x=recorte, encuadre=encuadre)
+    db.actualizar("clips", cid, recorte_x=seguimiento["recorte_x"],
+                  trayectoria=seguimiento["trayectoria"], encuadre=encuadre)
     return {"detectado": True, "clip": _clip(cid)}
 
 
@@ -543,6 +648,9 @@ def exportar_clip(cid: str) -> dict:
 def _encolar_exportacion(clip: dict) -> dict:
     """Guarda una copia inmutable del clip y la pone en cola. Llamar con `_transicion` tomado."""
     parametros = {k: clip[k] for k in ("inicio", "fin", "encuadre", "recorte_x", "subtitulos", "estilo")}
+    parametros["cortes"] = clip.get("cortes") or []
+    parametros["trayectoria"] = clip.get("trayectoria") or []
+    parametros["composicion"] = clip.get("composicion") or {}
     exp = db.insertar(
         "exportaciones",
         {"clip_id": clip["id"], "proyecto_id": clip["proyecto_id"], "titulo": clip["titulo"],
@@ -602,16 +710,7 @@ def _fondo(nombre: str) -> Path:
     raise HTTPException(404, "El fondo no existe.")
 
 
-@app.get("/api/fondos")
-def listar_fondos() -> dict:
-    return {
-        "carpeta": str(config.FONDOS_DIR),
-        "fondos": [
-            {"nombre": f.name, "tamano_mb": round(f.stat().st_size / 1024**2, 1)}
-            for f in pipeline.listar_fondos()
-        ],
-    }
-
+# GET /api/fondos (locales + remotos) y /api/fondos/remotos viven en fondos_remotos.router.
 
 @app.get("/api/fondos/{nombre}/video")
 def ver_fondo(nombre: str) -> FileResponse:
@@ -625,6 +724,10 @@ def abrir_carpeta_fondos() -> dict:
         os.startfile(config.FONDOS_DIR)  # type: ignore[attr-defined]
     return {"carpeta": str(config.FONDOS_DIR)}
 
+
+app.include_router(fondos_remotos.router)
+app.include_router(vivo.router)
+app.include_router(actualizaciones.router)
 
 # La interfaz web se monta al final para no tapar las rutas de la API.
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

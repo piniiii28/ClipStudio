@@ -1,5 +1,12 @@
 # Revisión con Codex
 
+**Nota de actualización — 2026-11-12:** este es el registro histórico de las pasadas formales
+2 a 4. Sus recuentos corresponden a esas versiones. Después se implementaron directos con
+chat, encuadres de streams y escritorio; la última ronda registra 156 pruebas automatizadas,
+31/31 comprobaciones de directo y 80/80 del flujo integral con el ejecutable. Estos resultados
+no constituyen otra pasada formal de auditoría. El estado vigente y los riesgos pendientes
+se mantienen en [estado.md](estado.md).
+
 Codex CLI 0.167.1, sesión de ChatGPT. Se ejecutó con `codex exec` en modo de solo lectura.
 Los informes completos de Codex no se incluyen en el repositorio; aquí está el resumen.
 
@@ -72,5 +79,6 @@ Codex ejecutó las pruebas: **36 correctas**. No encontró nada de gravedad alta
 | 12 | Baja | Se aceptaban subtítulos solapados | **Corregido**: el anterior termina donde empieza el siguiente |
 | 13 | Duda | Un audio truncado podía dejar el bucle sin avanzar | **Corregido**: una lectura vacía se trata como error |
 
-Las correcciones de la pasada 4 **no han sido revisadas por Codex todavía**; sí pasaron las
-pruebas propias (ver `estado.md`).
+No se registra aquí una nueva pasada formal que vuelva a auditar todas las correcciones de
+la pasada 4 y las funciones añadidas después. Las verificaciones de implementación y pruebas
+posteriores se documentan en [estado.md](estado.md).

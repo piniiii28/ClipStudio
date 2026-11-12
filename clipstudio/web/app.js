@@ -1,6 +1,10 @@
 // ClipStudio - interfaz. Sin dependencias ni compilacion.
 // Todo el texto que viene del servidor se inserta con textContent (nunca innerHTML).
 
+import { vistaVivo } from "./vivo.js";
+import { crearSelectorStream, dibujarStream } from "./encuadre-stream.js";
+import { iniciarActualizaciones } from "./actualizaciones.js";
+
 const vista = document.getElementById("vista");
 const ACTIVOS = ["en_cola", "procesando"];
 const ESTADOS = { en_cola: "En cola", procesando: "Procesando", listo: "Listo", error: "Error", cancelado: "Cancelado" };
@@ -19,6 +23,7 @@ const PREAJUSTES = {
 let temporizador = null;   // sondeo de la vista actual
 let limpiarVista = null;   // funcion de limpieza de la vista actual
 let generacion = 0;        // cambia en cada navegacion; las vistas viejas se descartan
+window.clipstudioGuardarAntesDeCerrar = async () => true;
 
 // ---------- utilidades ----------
 
@@ -99,10 +104,22 @@ function navegar() {
   temporizador = null;
   if (limpiarVista) { limpiarVista(); limpiarVista = null; }
   vista.replaceChildren();
+  if (location.hash === "#/vivo") return vistaVivo(contextoVista());
   const m = location.hash.match(/^#\/p\/([0-9a-f]{32})$/);
   if (m) vistaEditor(m[1], generacion); else vistaProyectos();
 }
 window.addEventListener("hashchange", navegar);
+
+// Utilidades que se pasan a las vistas de otros modulos (por ejemplo vivo.js).
+function contextoVista() {
+  const miGeneracion = generacion;
+  return {
+    h, api, avisar, intentar, vista,
+    vigente: () => miGeneracion === generacion,
+    sondear: (fn, ms) => { clearInterval(temporizador); temporizador = setInterval(fn, ms); },
+    alLimpiar: (fn) => { limpiarVista = fn; },
+  };
+}
 
 async function estadoSistema() {
   const el = document.getElementById("estado-sistema");
@@ -260,27 +277,39 @@ async function vistaEditor(pid, miGeneracion) {
   const transcripcion = (await intentar(() => api("GET", `/proyectos/${pid}/transcripcion`))) || { frases: [] };
   if (!vigente()) return;
   // Videos de fondo para el encuadre "dividido" (se piden una vez al abrir el editor).
-  let fondos = (await intentar(() => api("GET", "/fondos"))) || { carpeta: "", fondos: [] };
+  let fondos = (await intentar(() => api("GET", "/fondos"))) || { carpeta: "", fondos: [], locales: [], remotos: [], ocultos: [] };
   if (!vigente()) return;
 
   let clip = proyecto.clips[0] || null;
   let pestana = "subtitulos";
   let seleccion = null;      // [indice, indice] de frases elegidas en la transcripcion
   let cancelado = false;
+  const sugerenciasTikTok = new Map();
+  const peticionesTikTok = new Map();
 
   const video = h("video", { src: `/api/proyectos/${pid}/video`, playsInline: true, preload: "auto" });
   // Franja inferior del encuadre "dividido": video de juego en bucle, siempre sin audio.
   const juego = h("video", { muted: true, loop: true, playsInline: true, preload: "metadata" });
   const juegoVacio = h("div", { class: "juego-vacio" }, "Fondo de juego");
-  const franjaJuego = h("div", { class: "franja-juego", hidden: true, "aria-hidden": "true" }, juego, juegoVacio);
+  // Fondo de YouTube: reproductor incrustado (sin descargar nada), recortado tipo "cover" por CSS.
+  const juegoWeb = h("iframe", { class: "juego-web", title: "Vista previa del fondo de YouTube", hidden: true, tabindex: "-1",
+    allow: "autoplay; encrypted-media", referrerpolicy: "strict-origin-when-cross-origin", "aria-hidden": "true" });
+  const juegoSinConexion = h("div", { class: "juego-vacio", hidden: true }, "Vista previa no disponible (sin conexión)");
+  const franjaJuego = h("div", { class: "franja-juego", hidden: true, "aria-hidden": "true" }, juego, juegoWeb, juegoSinConexion, juegoVacio);
   const subInterior = h("span", {});
   const subVista = h("div", { class: "subtitulo-vista" }, subInterior);
   const ganchoInterior = h("span", {});
   const ganchoVista = h("div", { class: "gancho-vista", hidden: true }, ganchoInterior);
+  const marcaInterior = h("span", {});
+  const marcaVista = h("div", { class: "marca-vista", hidden: true }, marcaInterior);
   // Fondo del encuadre "ajustar": copia pequena del fotograma actual, ampliada y desenfocada con CSS.
   const fondoVista = h("canvas", { class: "fondo-vista", width: 90, height: 160, hidden: true, "aria-hidden": "true" });
   const fondoCtx = fondoVista.getContext("2d");
-  const telefono = h("div", { class: "telefono" }, fondoVista, video, franjaJuego, ganchoVista, subVista);
+  const streamVista = h("canvas", { class: "stream-vista", width: 360, height: 640, hidden: true });
+  let fuenteStream = null;
+  const creditoVista = h("div", { class: "credito-vista", hidden: true });
+  let creditoFondo = "";   // texto de credito del fondo que se previsualiza ("" si no tiene)
+  const telefono = h("div", { class: "telefono" }, fondoVista, video, streamVista, franjaJuego, ganchoVista, subVista, marcaVista, creditoVista);
   const listaClips = h("div", { class: "lista-clips" });
   const panelDerecho = h("div", {});
   const controles = h("div", { class: "controles" });
@@ -333,6 +362,7 @@ async function vistaEditor(pid, miGeneracion) {
       local.subtitulos = nuevo.subtitulos;
       if (cambio && clip && clip.id === id && pestana === "subtitulos") pintarDerecha();
     }
+    if (esRango(cambios) && clip?.id === id && pestana === "aspecto") { ajustarVideo(); pintarDerecha(); }
     actualizarBloqueo();
     pintarClips();
     return true;
@@ -360,7 +390,9 @@ async function vistaEditor(pid, miGeneracion) {
       if (pendientes.size === 0 && cadena === esperada) return true;
     }
   }
+  window.clipstudioGuardarAntesDeCerrar = vaciar;
   function guardar(cambios) {
+    if (esRango(cambios) || "recorte_x" in cambios || cambios.seguimiento === false) clip.trayectoria = [];
     Object.assign(clip, cambios);
     pendientes.set(clip.id, { ...(pendientes.get(clip.id) || {}), ...cambios });
     clearTimeout(reloj);
@@ -388,9 +420,47 @@ async function vistaEditor(pid, miGeneracion) {
   }
   const AVISO_GUARDADO = "No se pudieron guardar los últimos cambios. Vuelve a intentarlo.";
 
+  const cortesDel = (c = clip) => c?.cortes || [];
+  const segundosQuitados = (c = clip) => cortesDel(c).reduce((n, t) => n + Math.max(0, Math.min(c.fin, t.fin) - Math.max(c.inicio, t.inicio)), 0);
+  const estaCortado = (f) => cortesDel().some((c) => c.inicio <= f.inicio && c.fin >= f.fin);
+  const corteEn = (t) => cortesDel().find((c) => c.inicio <= t && t < c.fin);
+  const textoDuracion = () => `Duración: ${fmt(clip.fin - clip.inicio - segundosQuitados())}` +
+    (cortesDel().length ? ` (${cortesDel().length} cortes, −${segundosQuitados().toFixed(2)} s)` : "");
+  function unirCortes(lista, inicio = clip.inicio, fin = clip.fin) {
+    const salida = [];
+    for (const c of lista.map((c) => ({ inicio: Math.max(inicio, c.inicio), fin: Math.min(fin, c.fin) }))
+      .filter((c) => c.fin - c.inicio >= 0.05 - 1e-9).sort((a, b) => a.inicio - b.inicio)) {
+      const ultimo = salida[salida.length - 1];
+      if (ultimo && c.inicio <= ultimo.fin) ultimo.fin = Math.max(ultimo.fin, c.fin);
+      else salida.push(c);
+    }
+    return salida;
+  }
+  function cambiarCortes(lista) {
+    const cortes = unirCortes(lista);
+    if (cortes.length > 200) return avisar("No se permiten más de 200 cortes por clip.", "error");
+    if (clip.fin - clip.inicio - cortes.reduce((n, c) => n + c.fin - c.inicio, 0) < 1 - 1e-9)
+      return avisar("El clip debe conservar al menos 1 segundo útil.", "error");
+    guardar({ cortes });
+    pintarControles(); pintarClips(); pintarDerecha(); pintarSubtitulo();
+  }
+
   // --- vista previa ---
   // Porcentaje del alto que ocupa el video de juego en "dividido" (predeterminado 45).
   const proporcionJuego = () => clip.estilo.juego_proporcion || 45;
+  function posicionHorizontal(ancho, visible) {
+    const puntos = clip.trayectoria || [];
+    if (!puntos.length) return -(ancho - visible) * clip.recorte_x;
+    const tiempo = video.currentTime;
+    const siguiente = puntos.findIndex((p) => p.tiempo > tiempo);
+    let centro = puntos[0].centro_x;
+    if (siguiente === -1) centro = puntos[puntos.length - 1].centro_x;
+    else if (siguiente > 0) {
+      const a = puntos[siguiente - 1], b = puntos[siguiente];
+      centro = a.centro_x + (b.centro_x - a.centro_x) * (tiempo - a.tiempo) / (b.tiempo - a.tiempo);
+    }
+    return -Math.max(0, Math.min(ancho - visible, ancho * centro - visible / 2));
+  }
   function ajustarVideo() {
     if (!clip) return;
     const dividido = clip.encuadre === "dividido";
@@ -408,6 +478,12 @@ async function vistaEditor(pid, miGeneracion) {
     }
     video.removeAttribute("style");
     pintarFranjaJuego();
+    streamVista.hidden = clip.encuadre !== "stream";
+    if (clip.encuadre === "stream") {
+      video.style.opacity = "0";
+      pintarStream();
+      return;
+    }
     if (clip.encuadre === "ajustar") return;
     const cw = telefono.clientWidth, ch = telefono.clientHeight;
     // En "dividido" el video se recorta a la franja de arriba; la franja de abajo lo cubre.
@@ -415,11 +491,16 @@ async function vistaEditor(pid, miGeneracion) {
     const aspecto = proyecto.ancho / proyecto.alto;
     if (aspecto > (dividido ? cw / F : 9 / 16)) {
       const w = F * aspecto;
-      video.style.cssText = `height:${F}px;width:${w}px;top:0;left:${-(w - cw) * clip.recorte_x}px`;
+      video.style.cssText = `height:${F}px;width:${w}px;top:0;left:${posicionHorizontal(w, cw)}px`;
     } else {
       const alto = cw / aspecto;
       video.style.cssText = `width:${cw}px;height:${alto}px;left:0;top:${-(alto - F) / 2}px`;
     }
+  }
+  function pintarStream() {
+    if (!clip || clip.encuadre !== "stream" || video.readyState < 2) return;
+    dibujarStream(streamVista, video, clip.composicion || {});
+    if (fuenteStream) fuenteStream.getContext("2d").drawImage(video, 0, 0, fuenteStream.width, fuenteStream.height);
   }
   // Dibuja el fotograma actual recortado a 9:16 (cubriendo todo el lienzo) como fondo.
   function pintarFondo() {
@@ -430,16 +511,72 @@ async function vistaEditor(pid, miGeneracion) {
     try { fondoCtx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cw, ch); } catch { /* fotograma aun no disponible */ }
   }
   // Muestra u oculta la franja de juego y elige el video que se previsualiza en ella.
+  const inicioVistaWeb = new Map();   // id de YouTube -> segundo desde el que se ve la vista previa
+  const sondaConexion = { cuando: 0, ok: true };
+  async function hayConexion() {
+    // Una peticion "no-cors" a YouTube solo falla si no hay red: basta para elegir el mensaje.
+    if (navigator.onLine === false) return false;
+    if (Date.now() - sondaConexion.cuando < 30000) return sondaConexion.ok;
+    try {
+      await fetch("https://www.youtube-nocookie.com/favicon.ico", { mode: "no-cors", cache: "no-store" });
+      sondaConexion.ok = true;
+    } catch { sondaConexion.ok = false; }
+    sondaConexion.cuando = Date.now();
+    return sondaConexion.ok;
+  }
+  function quitarVistaWeb() {
+    if (juegoWeb.getAttribute("src")) juegoWeb.removeAttribute("src");
+    juegoWeb.hidden = true;
+    juegoSinConexion.hidden = true;
+  }
+  function mostrarVistaWeb(remoto) {
+    juego.pause();
+    if (juego.getAttribute("src")) { juego.removeAttribute("src"); juego.load(); }
+    juego.hidden = true;
+    juegoVacio.hidden = true;
+    if (!inicioVistaWeb.has(remoto.id)) inicioVistaWeb.set(remoto.id, Math.floor(Math.random() * Math.max(1, remoto.duracion - 180)));
+    const inicio = inicioVistaWeb.get(remoto.id);
+    const src = `https://www.youtube-nocookie.com/embed/${remoto.id}?autoplay=1&mute=1&controls=0&loop=1&playlist=${remoto.id}&start=${inicio}&playsinline=1&modestbranding=1&rel=0`;
+    // Recorte "cover": el reproductor es 16:9 y se amplia hasta cubrir la franja (con un poco de margen
+    // para esconder los bordes de la interfaz de YouTube); sin interaccion (pointer-events:none).
+    const cw = telefono.clientWidth, ch = telefono.clientHeight * proporcionJuego() / 100;
+    const ancho = Math.max(cw, ch * 16 / 9) * 1.12, alto = ancho * 9 / 16;
+    juegoWeb.style.cssText = `width:${ancho}px;height:${alto}px;left:${(cw - ancho) / 2}px;top:${(ch - alto) / 2}px`;
+    if (juegoWeb.dataset.id === remoto.id && (juegoWeb.getAttribute("src") || !juegoSinConexion.hidden)) return;
+    juegoWeb.dataset.id = remoto.id;
+    quitarVistaWeb();
+    hayConexion().then((ok) => {
+      // La seleccion pudo cambiar mientras se comprobaba la conexion.
+      if (cancelado || juegoWeb.dataset.id !== remoto.id) return;
+      if (!ok) { juegoSinConexion.hidden = false; return; }
+      juegoWeb.hidden = false;
+      juegoWeb.setAttribute("src", src);
+    });
+  }
+  // Fondo que se previsualiza: el elegido en el estilo; con "al azar" (o uno que ya no existe), el primero
+  // de los locales y, si no hay, el primero de YouTube (el MP4 elige al exportar).
+  function fondoDeVista() {
+    const elegido = clip.estilo.fondo_juego;
+    const remoto = fondos.remotos.find((f) => f.valor === elegido);
+    if (remoto) return { remoto };
+    const locales = fondos.locales.map((f) => f.nombre);
+    if (locales.includes(elegido)) return { local: elegido };
+    if (locales.length) return { local: locales[0] };
+    if (fondos.remotos.length) return { remoto: fondos.remotos[0] };
+    return {};
+  }
   function pintarFranjaJuego() {
     const dividido = clip.encuadre === "dividido";
     franjaJuego.hidden = !dividido;
-    if (!dividido) { juego.pause(); return; }
+    if (!dividido) { juego.pause(); quitarVistaWeb(); delete juegoWeb.dataset.id; creditoFondo = ""; return; }
     franjaJuego.style.top = (100 - proporcionJuego()) + "%";
     franjaJuego.style.height = proporcionJuego() + "%";
-    const nombres = fondos.fondos.map((f) => f.nombre);
-    // "Al azar" en el editor se previsualiza con el primero de la lista (el MP4 elige al exportar).
-    const elegido = nombres.includes(clip.estilo.fondo_juego) ? clip.estilo.fondo_juego : nombres[0];
-    if (!elegido) {
+    const { remoto, local } = fondoDeVista();
+    creditoFondo = remoto ? remoto.credito : "";
+    if (remoto) { mostrarVistaWeb(remoto); return; }
+    quitarVistaWeb();
+    delete juegoWeb.dataset.id;
+    if (!local) {
       if (juego.getAttribute("src")) { juego.removeAttribute("src"); juego.load(); }
       juego.hidden = true;
       juegoVacio.hidden = false;
@@ -447,7 +584,7 @@ async function vistaEditor(pid, miGeneracion) {
     }
     juego.hidden = false;
     juegoVacio.hidden = true;
-    const src = `/api/fondos/${encodeURIComponent(elegido)}/video`;
+    const src = `/api/fondos/${encodeURIComponent(local)}/video`;
     if (juego.getAttribute("src") !== src) {
       juego.setAttribute("src", src);
       if (!video.paused) juego.play().catch(() => {});
@@ -456,11 +593,22 @@ async function vistaEditor(pid, miGeneracion) {
   async function recargarFondos() {
     fondos = (await intentar(() => api("GET", "/fondos"))) || fondos;
   }
+  // Crédito del autor del fondo: esquina inferior izquierda de la franja del juego, a 24 px de los bordes.
+  function pintarCredito(e, escala) {
+    const ver = clip.encuadre === "dividido" && e.credito_fondo && !!creditoFondo;
+    creditoVista.hidden = !ver;
+    if (!ver) return;
+    if (creditoVista.textContent !== creditoFondo) creditoVista.textContent = creditoFondo;
+    creditoVista.style.left = `${24 * escala}px`;
+    creditoVista.style.bottom = `${24 * escala}px`;
+    creditoVista.style.fontSize = (e.credito_tamano * escala) + "px";
+  }
   let claveSub = "";
   function pintarSubtitulo() {
-    if (!clip) { subInterior.textContent = ""; claveSub = ""; ganchoVista.hidden = true; return; }
+    if (!clip) { subInterior.textContent = ""; claveSub = ""; ganchoVista.hidden = true; marcaVista.hidden = true; creditoVista.hidden = true; return; }
     const t = video.currentTime, e = clip.estilo, escala = telefono.clientHeight / 1920;
-    const cue = clip.subtitulos.find((c) => t >= c.inicio && t < c.fin);
+    pintarCredito(e, escala);
+    const cue = corteEn(t) ? null : clip.subtitulos.find((c) => t >= c.inicio && t < c.fin);
     const trozos = cue ? (e.mayusculas ? cue.texto.toUpperCase() : cue.texto).split(/\s+/).filter(Boolean) : [];
     // Palabra activa: el tiempo del subtitulo se reparte segun el largo de cada palabra
     // (el MP4 usa los tiempos reales de la transcripcion cuando el texto no se edito).
@@ -487,7 +635,7 @@ async function vistaEditor(pid, miGeneracion) {
     subInterior.style.background = e.caja && trozos.length ? e.color_borde : "";
     subInterior.style.padding = e.caja ? `${10 * escala}px ${18 * escala}px` : "";
     // Titulo gancho
-    const tRel = t - clip.inicio;
+    const tRel = t - clip.inicio - cortesDel().reduce((n, c) => n + Math.max(0, Math.min(t, c.fin) - c.inicio), 0);
     const visible = !!e.titulo_gancho && tRel >= -0.1 && (e.gancho_segundos === 0 || tRel < e.gancho_segundos);
     ganchoVista.hidden = !visible;
     if (visible) {
@@ -498,13 +646,34 @@ async function vistaEditor(pid, miGeneracion) {
       ganchoInterior.style.background = e.gancho_fondo;
       ganchoInterior.style.padding = `${12 * escala}px ${22 * escala}px`;
     }
+    // Marca de agua: durante todo el clip, en la esquina elegida a 40 px de los bordes.
+    marcaVista.hidden = !e.marca;
+    if (e.marca) {
+      if (marcaInterior.textContent !== e.marca) marcaInterior.textContent = e.marca;
+      const arriba = e.marca_posicion.startsWith("arriba"), izquierda = e.marca_posicion.endsWith("izquierda");
+      marcaVista.style.top = arriba ? `${40 * escala}px` : "auto";
+      marcaVista.style.bottom = arriba ? "auto" : `${40 * escala}px`;
+      marcaVista.style.left = izquierda ? `${40 * escala}px` : "auto";
+      marcaVista.style.right = izquierda ? "auto" : `${40 * escala}px`;
+      marcaVista.style.fontSize = (e.marca_tamano * escala) + "px";
+      marcaVista.style.color = e.marca_color;
+      marcaVista.style.opacity = e.marca_opacidad / 100;
+    }
   }
   let cuadro = 0;
   function bucle() {
     if (cancelado) return;
+    if (clip && !video.paused) {
+      const corte = corteEn(video.currentTime);
+      if (corte) video.currentTime = corte.fin;
+    }
     if (clip && !video.paused && video.currentTime >= clip.fin) { video.pause(); video.currentTime = clip.inicio; }
     pintarSubtitulo();
     pintarFondo();
+    pintarStream();
+    if (clip?.trayectoria?.length && !["ajustar", "stream"].includes(clip.encuadre)) {
+      video.style.left = `${posicionHorizontal(parseFloat(video.style.width), telefono.clientWidth)}px`;
+    }
     moverCabezal();
     marcarCueActivo();
     cuadro = requestAnimationFrame(bucle);
@@ -513,10 +682,13 @@ async function vistaEditor(pid, miGeneracion) {
     if (!clip) return;
     if (video.paused) {
       if (video.currentTime < clip.inicio - 0.05 || video.currentTime >= clip.fin - 0.05) video.currentTime = clip.inicio;
+      const corte = corteEn(video.currentTime);
+      if (corte) video.currentTime = corte.fin;
       video.play().catch(() => avisar("El navegador no pudo reproducir la vista previa.", "error"));
     } else video.pause();
   }
   video.addEventListener("click", reproducir);
+  streamVista.addEventListener("click", reproducir);
   // El video de juego acompana al principal: suena igual de "play" y "pause" (siempre mudo).
   video.addEventListener("play", () => { if (clip && clip.encuadre === "dividido" && juego.getAttribute("src")) juego.play().catch(() => {}); });
   video.addEventListener("pause", () => juego.pause());
@@ -538,6 +710,9 @@ async function vistaEditor(pid, miGeneracion) {
   }
   const aPct = (t) => ((t - ventana[0]) / (ventana[1] - ventana[0])) * 100;
   function pintarBarra() {
+    barra.querySelectorAll(".recorte-corte").forEach((n) => n.remove());
+    for (const c of unirCortes(cortesDel())) barra.insertBefore(h("div", { class: "recorte-corte",
+      style: `left:${aPct(c.inicio)}%;width:${aPct(c.fin) - aPct(c.inicio)}%` }), asaInicio);
     zona.style.left = aPct(clip.inicio) + "%";
     zona.style.width = (aPct(clip.fin) - aPct(clip.inicio)) + "%";
     asaInicio.style.left = aPct(clip.inicio) + "%";
@@ -557,9 +732,13 @@ async function vistaEditor(pid, miGeneracion) {
     inicio = Math.max(0, Math.min(inicio, proyecto.duracion - 1));
     fin = Math.max(inicio + 1, Math.min(fin, proyecto.duracion));
     if (fin - inicio > 600) { if (mover === "inicio") inicio = fin - 600; else fin = inicio + 600; }
-    guardar({ inicio: Math.round(inicio * 1000) / 1000, fin: Math.round(fin * 1000) / 1000 });
+    inicio = Math.round(inicio * 1000) / 1000;
+    fin = Math.round(fin * 1000) / 1000;
+    let cortes = unirCortes(cortesDel(), inicio, fin);
+    if (fin - inicio - cortes.reduce((n, c) => n + c.fin - c.inicio, 0) < 1 - 1e-9) cortes = [];
+    guardar({ inicio, fin, cortes });
     pintarBarra();
-    if (entradaInicio) { entradaInicio.value = fmt(clip.inicio, 2); entradaFin.value = fmt(clip.fin, 2); duracionClip.textContent = `Duración: ${fmt(clip.fin - clip.inicio)}`; }
+    if (entradaInicio) { entradaInicio.value = fmt(clip.inicio, 2); entradaFin.value = fmt(clip.fin, 2); duracionClip.textContent = textoDuracion(); }
   }
   barra.addEventListener("pointerdown", (e) => {
     if (!clip) return;
@@ -602,7 +781,7 @@ async function vistaEditor(pid, miGeneracion) {
     };
     entradaInicio = campoTiempo("inicio");
     entradaFin = campoTiempo("fin");
-    duracionClip = h("span", { class: "tenue pequeno" }, `Duración: ${fmt(clip.fin - clip.inicio)}`);
+    duracionClip = h("span", { class: "tenue pequeno" }, textoDuracion());
     const ajuste = (clave, delta) => h("button", { class: "mini", "aria-label": `${delta > 0 ? "Sumar" : "Restar"} medio segundo al ${clave}`, onclick: () => {
       if (clave === "inicio") fijarRango(clip.inicio + delta, clip.fin, "inicio"); else fijarRango(clip.inicio, clip.fin + delta, "fin");
       calcularVentana(); pintarBarra();
@@ -636,16 +815,16 @@ async function vistaEditor(pid, miGeneracion) {
       h("button", { class: "clip-item" + (clip && c.id === clip.id ? " activo" : ""), onclick: () => elegirClip(c) },
         h("strong", {}, c.titulo),
         h("span", { class: "clip-meta" },
-          h("span", { class: "tenue pequeno" }, `${fmt(c.inicio, 0)} – ${fmt(c.fin, 0)} · ${Math.round(c.fin - c.inicio)} s`),
+          h("span", { class: "tenue pequeno" }, `${fmt(c.inicio, 0)} – ${fmt(c.fin, 0)} · ${Math.round(c.fin - c.inicio - segundosQuitados(c))} s`),
           h("span", { class: "etiqueta origen-" + (c.origen || "manual") }, ORIGENES[c.origen] || "Manual")),
         c.motivos && c.motivos.length ? h("ul", { class: "motivos" }, c.motivos.map((m) => h("li", {}, m))) : null)));
     if (!proyecto.clips.length) listaClips.append(h("p", { class: "tenue" }, "No hay clips. Crea uno desde la transcripción o con el botón «Nuevo clip»."));
   }
 
-  const ORIGENES = { sugerido: "Propuesto", manual: "Manual", division: "División" };
+  const ORIGENES = { sugerido: "Propuesto", manual: "Manual", division: "División", vivo: "En vivo" };
 
   // --- panel derecho ---
-  const PESTANAS = [["subtitulos", "Subtítulos"], ["aspecto", "Encuadre y estilo"], ["transcripcion", "Transcripción"], ["exportar", "Exportar"]];
+  const PESTANAS = [["subtitulos", "Subtítulos"], ["aspecto", "Encuadre y estilo"], ["transcripcion", "Transcripción"], ["exportar", "Exportar"], ["tiktok", "TikTok"]];
   function marcarCueActivo() {
     if (pestana !== "subtitulos" || !clip) return;
     const t = video.currentTime;
@@ -655,6 +834,7 @@ async function vistaEditor(pid, miGeneracion) {
     });
   }
   function pintarDerecha() {
+    fuenteStream = null;
     const barraPestanas = h("div", { class: "pestanas", role: "tablist" }, PESTANAS.map(([id, texto]) =>
       h("button", { class: pestana === id ? "activa" : "", role: "tab", "aria-selected": String(pestana === id), onclick: () => { pestana = id; pintarDerecha(); } },
         id === "exportar" && proyecto.exportaciones.length ? `${texto} (${proyecto.exportaciones.length})` : texto)));
@@ -662,6 +842,7 @@ async function vistaEditor(pid, miGeneracion) {
     if (pestana === "transcripcion") cuerpo = panelTranscripcion();
     else if (pestana === "exportar") cuerpo = panelExportar();
     else if (!clip) cuerpo = h("p", { class: "tenue" }, "Elige o crea un clip.");
+    else if (pestana === "tiktok") cuerpo = panelTikTok();
     else cuerpo = pestana === "subtitulos" ? panelSubtitulos() : panelAspecto();
     panelDerecho.replaceChildren(barraPestanas, cuerpo);
   }
@@ -682,12 +863,23 @@ async function vistaEditor(pid, miGeneracion) {
       const texto = h("input", { class: "texto", value: c.texto, maxLength: 200, "aria-label": "Texto del subtítulo" });
       texto.addEventListener("input", () => { c.texto = texto.value; guardar({ subtitulos: clip.subtitulos }); });
       texto.addEventListener("focus", () => { video.pause(); video.currentTime = c.inicio + 0.01; });
-      return h("div", { class: "cue" }, tiempo("inicio"), tiempo("fin"), texto,
+      return h("div", { class: "cue" + (estaCortado(c) ? " cue-cortado" : "") }, tiempo("inicio"), tiempo("fin"), texto,
         h("button", { class: "mini peligro", "aria-label": "Eliminar subtítulo", onclick: () => {
           clip.subtitulos.splice(i, 1); guardar({ subtitulos: clip.subtitulos }); pintarDerecha();
         } }, "✕"));
     });
     return h("div", {},
+      h("div", { class: "fila", style: "margin-bottom:10px" },
+        h("button", { onclick: async () => {
+          const id = clip.id, antes = cortesDel().map((c) => ({ ...c })), quitados = segundosQuitados();
+          const r = await operar("quitar-silencios", ["cortes"]);
+          if (!r) return;
+          const anadidos = r.cortes.filter((c) => !antes.some((a) => a.inicio <= c.inicio && a.fin >= c.fin)).length;
+          const segundos = segundosQuitados(r) - quitados;
+          if (clip?.id === id) { pintarControles(); pintarClips(); pintarDerecha(); }
+          avisar(`${anadidos} cortes añadidos; ${segundos.toFixed(2)} s adicionales eliminados.`);
+        } }, "Quitar silencios"),
+        cortesDel().length ? h("button", { onclick: () => cambiarCortes([]) }, "Restaurar todo") : null),
       h("div", { class: "fila", style: "margin-bottom:10px" },
         h("button", { onclick: () => {
           const t = Math.max(clip.inicio, Math.min(video.currentTime, clip.fin - 0.3));
@@ -714,11 +906,13 @@ async function vistaEditor(pid, miGeneracion) {
         valor.textContent = String(v);
         if (alCambiar) alCambiar(v); else estilo({ [clave]: v });
       });
+      if (clave === "recorte_x") entrada.addEventListener("change", pintarDerecha);
       return h("div", { class: "campo" }, h("label", {}, etiqueta, ": ", valor), entrada);
     };
     const encuadre = h("select", { "aria-label": "Tipo de encuadre" },
       h("option", { value: "rellenar" }, "Rellenar (recorta los lados)"),
       h("option", { value: "ajustar" }, "Ajustar (video completo con fondo)"),
+      h("option", { value: "stream" }, "Stream (cámara y gameplay)"),
       h("option", { value: "dividido" }, "Dividido (video arriba y juego abajo)"));
     encuadre.value = clip.encuadre;
     encuadre.addEventListener("change", () => {
@@ -726,23 +920,69 @@ async function vistaEditor(pid, miGeneracion) {
       if (encuadre.value === "dividido" && e.posicion > 100 - proporcionJuego()) estilo({ posicion: 100 - proporcionJuego() });
       guardar({ encuadre: encuadre.value }); ajustarVideo(); pintarDerecha();
     });
-    const nombresFondo = fondos.fondos.map((f) => f.nombre);
+    const nombresFondo = fondos.locales.map((f) => f.nombre);
+    const valoresRemotos = fondos.remotos.map((f) => f.valor);
     const fondoJuego = h("select", { "aria-label": "Video de fondo" },
       h("option", { value: "" }, "Al azar"),
-      fondos.fondos.map((f) => h("option", { value: f.nombre }, f.nombre)));
-    fondoJuego.value = nombresFondo.includes(e.fondo_juego) ? e.fondo_juego : "";
+      fondos.locales.length ? h("optgroup", { label: "En tu equipo" },
+        fondos.locales.map((f) => h("option", { value: f.nombre }, f.nombre))) : null,
+      fondos.remotos.length ? h("optgroup", { label: "Desde YouTube (se descarga solo el tramo al exportar)" },
+        fondos.remotos.map((f) => h("option", { value: f.valor }, `${f.titulo} — ${f.canal}`))) : null);
+    fondoJuego.value = nombresFondo.includes(e.fondo_juego) || valoresRemotos.includes(e.fondo_juego) ? e.fondo_juego : "";
     fondoJuego.addEventListener("change", () => { estilo({ fondo_juego: fondoJuego.value }); ajustarVideo(); });
     const abrirFondos = h("button", { title: fondos.carpeta, onclick: async () => {
       await intentar(() => api("POST", "/fondos/abrir-carpeta"));
       await recargarFondos();
       ajustarVideo(); pintarDerecha();
     } }, "Abrir carpeta de fondos");
+    // Fondos de YouTube: se consultan sin descargar; los de serie solo se ocultan.
+    const enlaceFondo = h("input", { type: "url", placeholder: "https://www.youtube.com/watch?v=…", maxLength: 2000,
+      style: "flex:1;min-width:0", "aria-label": "Enlace de YouTube para añadir un fondo" });
+    const botonAnadir = h("button", { onclick: async () => {
+      const url = enlaceFondo.value.trim();
+      if (!url) return avisar("Pega el enlace de un video de YouTube.", "error");
+      botonAnadir.disabled = true;
+      botonAnadir.textContent = "Consultando…";
+      const r = await intentar(() => api("POST", "/fondos/remotos", { url }));
+      botonAnadir.disabled = false;
+      botonAnadir.textContent = "Añadir";
+      if (!r || !clip) return;
+      fondos = r;
+      estilo({ fondo_juego: r.fondo.valor });
+      avisar(`Fondo añadido: ${r.fondo.titulo} (${r.fondo.canal}).`);
+      ajustarVideo(); pintarDerecha();
+    } }, "Añadir");
+    enlaceFondo.addEventListener("keydown", (ev) => { if (ev.key === "Enter") botonAnadir.click(); });
+    const quitarFondo = async (f) => {
+      const r = await intentar(() => api("DELETE", `/fondos/remotos/${f.id}`));
+      if (!r || !clip) return;
+      fondos = r;
+      if (clip.estilo.fondo_juego === f.valor) estilo({ fondo_juego: "" });
+      ajustarVideo(); pintarDerecha();
+    };
+    const mostrarFondo = async (f) => {
+      const r = await intentar(() => api("POST", "/fondos/remotos", { url: f.url }));
+      if (!r || !clip) return;
+      fondos = r;
+      ajustarVideo(); pintarDerecha();
+    };
+    const enlaceAccion = (texto, alClic, titulo) => h("button", { class: "enlace", title: titulo, onclick: alClic }, texto);
+    const listaRemotos = fondos.remotos.length || fondos.ocultos.length ? h("ul", { class: "fondos-remotos" },
+      fondos.remotos.map((f) => h("li", {},
+        h("span", { title: f.licencia }, `${f.titulo} — ${f.canal}`),
+        enlaceAccion(f.de_serie ? "Ocultar" : "Quitar", () => quitarFondo(f), f.de_serie ? "Deja de mostrarlo en la lista" : "Quita este fondo de la lista"))),
+      fondos.ocultos.map((f) => h("li", { class: "tenue" },
+        h("span", {}, `${f.titulo} (oculto)`),
+        enlaceAccion("Mostrar", () => mostrarFondo(f))))) : null;
     const bloqueDividido = clip.encuadre === "dividido" ? h("div", {},
       h("div", { class: "campo" }, fondoJuego),
+      h("div", { class: "campo" }, h("label", {}, "Añadir fondo de YouTube"),
+        h("div", { class: "fila" }, enlaceFondo, botonAnadir)),
+      listaRemotos,
       rango("Alto del juego (% de la pantalla)", "juego_proporcion", 25, 60, { juego_proporcion: proporcionJuego() },
         (v) => { estilo({ juego_proporcion: v }); ajustarVideo(); }),
       h("div", { class: "campo fila" }, abrirFondos),
-      fondos.fondos.length ? null : h("p", { class: "tenue pequeno" }, "No hay videos de fondo. Copia alguno en la carpeta de fondos y vuelve a abrir esta pestaña.")) : null;
+      fondos.locales.length || fondos.remotos.length ? null : h("p", { class: "tenue pequeno" }, "No hay videos de fondo. Copia alguno en la carpeta de fondos o añade un enlace de YouTube.")) : null;
     const color = (etiqueta, clave, despues = null) => {
       const entrada = h("input", { type: "color", value: e[clave] });
       entrada.addEventListener("input", () => { estilo({ [clave]: entrada.value.toUpperCase() }); if (despues) despues(); });
@@ -753,6 +993,10 @@ async function vistaEditor(pid, miGeneracion) {
       entrada.addEventListener("change", () => { estilo({ [clave]: entrada.checked }); if (repintar) pintarDerecha(); });
       return h("label", { class: "fila", style: "color:var(--texto);font-size:14px;margin:0" }, entrada, etiqueta);
     };
+    const bloqueCredito = clip.encuadre === "dividido" ? h("div", {},
+      h("div", { class: "campo" }, casilla("Mostrar crédito del fondo", "credito_fondo", true)),
+      e.credito_fondo ? rango("Tamaño del crédito", "credito_tamano", 16, 60) : null,
+      h("p", { class: "tenue pequeno" }, "Algunos fondos piden dar crédito al autor (licencia Creative Commons con atribución). Puedes mostrarlo aquí o en la descripción de tu publicación.")) : null;
     const preajuste = h("select", { "aria-label": "Estilo prefabricado" },
       h("option", { value: "" }, "Elegir un estilo prefabricado…"),
       Object.keys(PREAJUSTES).map((nombre) => h("option", { value: nombre }, nombre)));
@@ -772,9 +1016,20 @@ async function vistaEditor(pid, miGeneracion) {
     gancho.addEventListener("input", () => estilo({ titulo_gancho: gancho.value }));
     // Los controles del gancho aparecen o desaparecen al escribir la primera letra o borrar todo.
     gancho.addEventListener("change", () => pintarDerecha());
+    const marca = h("input", { value: e.marca, maxLength: 40, style: "width:100%", placeholder: "@tucanal", "aria-label": "Texto de la marca de agua" });
+    marca.addEventListener("input", () => estilo({ marca: marca.value }));
+    // Igual que el gancho: los controles de la marca aparecen al escribir la primera letra o al borrar todo.
+    marca.addEventListener("change", () => pintarDerecha());
+    const posicionMarca = h("select", { "aria-label": "Posición de la marca de agua" },
+      h("option", { value: "arriba_izquierda" }, "Arriba a la izquierda"),
+      h("option", { value: "arriba_derecha" }, "Arriba a la derecha"),
+      h("option", { value: "abajo_izquierda" }, "Abajo a la izquierda"),
+      h("option", { value: "abajo_derecha" }, "Abajo a la derecha"));
+    posicionMarca.value = e.marca_posicion;
+    posicionMarca.addEventListener("change", () => estilo({ marca_posicion: posicionMarca.value }));
     const predeterminado = h("button", { onclick: async () => {
       if (!(await vaciar())) return avisar(AVISO_GUARDADO, "error");
-      const r = await intentar(() => api("PUT", "/preferencias/clip", { estilo: clip.estilo, encuadre: clip.encuadre }));
+      const r = await intentar(() => api("PUT", "/preferencias/clip", { estilo: clip.estilo, encuadre: clip.encuadre, composicion: clip.composicion || {} }));
       if (r) avisar("Guardado: los clips nuevos nacerán con este estilo y encuadre.");
     } }, "Usar este estilo en los clips nuevos");
     // Copia el estilo de este clip a todos los demas del proyecto.
@@ -789,11 +1044,25 @@ async function vistaEditor(pid, miGeneracion) {
       // Se actualizan los mismos objetos de clip para no perder la seleccion actual.
       for (const nuevo of p.clips) {
         const local = proyecto.clips.find((c) => c.id === nuevo.id);
-        if (local) { local.estilo = nuevo.estilo; local.encuadre = nuevo.encuadre; }
+        if (local) { local.estilo = nuevo.estilo; local.encuadre = nuevo.encuadre; local.composicion = nuevo.composicion; }
       }
       pintarClips(); ajustarVideo();
       avisar(`Estilo aplicado a ${p.aplicados} clip(s).`);
     } }, texto);
+    let bloqueStream = null;
+    if (clip.encuadre === "stream") {
+      fuenteStream = h("canvas", { width: 640, height: Math.max(2, Math.round(640 * proyecto.alto / proyecto.ancho)) });
+      const selector = crearSelectorStream({ h, fuente: fuenteStream, composicion: clip.composicion,
+        alCambiar: (composicion) => { guardar({ composicion }); pintarStream(); },
+        alAutomatico: async () => {
+          const r = await operar("camara-auto", ["composicion", "encuadre"]);
+          if (!r) return;
+          if (!r.detectado) return avisar("No se detectó la cámara. Puedes marcarla sobre la imagen.");
+          ajustarVideo(); pintarDerecha();
+        } });
+      bloqueStream = selector.elemento;
+      pintarStream();
+    }
     const otros = Math.max(0, proyecto.clips.length - 1);
     const ancho = proyecto.ancho / proyecto.alto > 9 / 16;
     const recorteVisible = (clip.encuadre === "rellenar" || clip.encuadre === "dividido") && ancho;
@@ -802,14 +1071,22 @@ async function vistaEditor(pid, miGeneracion) {
       seccion("Encuadre 9:16",
         h("div", { class: "campo" }, encuadre),
         bloqueDividido,
+        bloqueCredito,
+        bloqueStream,
         recorteVisible ? rango("Posición horizontal del recorte (0 izquierda – 100 derecha)", "recorte_x", 0, 100, clip,
           (v) => { guardar({ recorte_x: v / 100 }); ajustarVideo(); }) : null,
         recorteVisible ? h("div", { class: "campo" }, h("button", { onclick: async () => {
-          const r = await operar("encuadre-auto", ["recorte_x", "encuadre"]);
+          const r = await operar("encuadre-auto", ["recorte_x", "encuadre", "trayectoria"]);
           if (!r) return;
-          if (!r.detectado) return avisar("No se detectó un rostro de frente en este fragmento. Ajusta la posición a mano.");
-          ajustarVideo(); pintarDerecha(); avisar("Encuadre centrado en el rostro detectado.");
-        } }, "Centrar en el rostro")) : null,
+          if (!r.detectado) return avisar("No se detectó un rostro con suficiente continuidad. Ajusta la posición a mano.");
+          ajustarVideo(); pintarDerecha(); avisar("Seguimiento del rostro activado.");
+        } }, "Seguir el rostro"),
+        clip.trayectoria?.length ? h("button", { onclick: () => {
+          guardar({ seguimiento: false }); ajustarVideo(); pintarDerecha();
+        } }, "Usar encuadre fijo") : null,
+        h("p", { class: "ayuda" }, clip.trayectoria?.length
+          ? "Seguimiento activo. Ajustar la posición o los límites del clip lo desactiva."
+          : "El seguimiento adapta el recorte al movimiento del rostro.")) : null,
         clip.encuadre === "ajustar" ? h("div", { class: "campo fila" }, fondo, e.fondo === "color" ? color("Color", "color_fondo", ajustarVideo) : null) : null,
         clip.encuadre === "ajustar" && e.fondo !== "color"
           ? rango("Intensidad del difuminado", "difuminado", 4, 50, e, (v) => { estilo({ difuminado: v }); ajustarVideo(); }) : null),
@@ -829,6 +1106,12 @@ async function vistaEditor(pid, miGeneracion) {
         e.titulo_gancho ? rango("Altura en pantalla (% desde arriba)", "gancho_posicion", 4, 90) : null,
         e.titulo_gancho ? rango("Tamaño", "gancho_tamano", 24, 140) : null,
         e.titulo_gancho ? h("div", { class: "fila campo" }, color("Texto", "gancho_color"), color("Fondo", "gancho_fondo")) : null),
+      seccion("Marca de agua",
+        h("div", { class: "campo" }, marca),
+        e.marca ? h("div", { class: "campo" }, posicionMarca) : null,
+        e.marca ? rango("Tamaño", "marca_tamano", 16, 80) : null,
+        e.marca ? rango("Opacidad (%)", "marca_opacidad", 10, 100) : null,
+        e.marca ? h("div", { class: "fila campo" }, color("Color", "marca_color")) : null),
       seccion("Aplicar a otros clips",
         h("div", { class: "botones-columna" },
           aplicarATodos("subtitulos", `Aplicar estos subtítulos a todos los clips (${otros})`,
@@ -852,6 +1135,7 @@ async function vistaEditor(pid, miGeneracion) {
       ? `${fmt(transcripcion.frases[seleccion[0]].inicio, 0)} – ${fmt(transcripcion.frases[seleccion[1]].fin, 0)}`
       : "Haz clic en una frase y luego Mayús+clic en otra para elegir un tramo.");
     const filas = transcripcion.frases.map((f, i) =>
+      h("div", { class: "fila-frase" + (clip && estaCortado(f) ? " frase-cortada" : "") },
       h("button", { class: "frase" + (seleccion && i >= seleccion[0] && i <= seleccion[1] ? " elegida" : ""), onclick: (ev) => {
         if (ev.shiftKey && seleccion) seleccion = [Math.min(seleccion[0], i), Math.max(seleccion[0], i)];
         else seleccion = [i, i];
@@ -859,8 +1143,74 @@ async function vistaEditor(pid, miGeneracion) {
         const tope = panelDerecho.querySelector(".desplazable").scrollTop;
         pintarDerecha();
         panelDerecho.querySelector(".desplazable").scrollTop = tope;
-      } }, h("span", { class: "tenue pequeno" }, fmt(f.inicio, 0)), h("span", {}, f.texto)));
+      } }, h("span", { class: "tenue pequeno" }, fmt(f.inicio, 0)), h("span", {}, f.texto)),
+      clip && f.inicio >= clip.inicio && f.fin <= clip.fin ? h("button", { class: "mini", onclick: (ev) => {
+        ev.stopPropagation();
+        if (estaCortado(f)) {
+          // Restaurar solo esta frase, incluso si su corte se fusiono con otros.
+          cambiarCortes(cortesDel().flatMap((c) => c.fin <= f.inicio || c.inicio >= f.fin ? [c] :
+            [{ inicio: c.inicio, fin: f.inicio }, { inicio: f.fin, fin: c.fin }]).filter((c) => c.fin > c.inicio));
+        } else cambiarCortes([...cortesDel(), { inicio: f.inicio, fin: f.fin }]);
+      } }, estaCortado(f) ? "Restaurar" : "Quitar") : null));
     return h("div", {}, h("div", { class: "fila", style: "margin-bottom:10px" }, crear, info), h("div", { class: "desplazable" }, filas));
+  }
+
+  function panelTikTok() {
+    const id = clip.id;
+    const datos = () => clip.tiktok || { contexto: "", texto: "" };
+    const firma = () => JSON.stringify([clip.titulo, clip.inicio, clip.fin, clip.cortes, clip.subtitulos, clip.estilo.titulo_gancho]);
+    const contexto = h("input", { value: datos().contexto || "", maxLength: 200,
+      placeholder: "Ej.: Valorant, Jett, clutch", "aria-label": "Juego o tema del clip" });
+    const texto = h("textarea", { value: datos().texto || "", maxLength: 1000, rows: 4,
+      "aria-label": "Hashtags para TikTok", placeholder: "Genera sugerencias o escribe tus hashtags." });
+    const cambiar = (cambio) => { if (clip?.id === id) guardar({ tiktok: { ...datos(), ...cambio } }); };
+    contexto.addEventListener("input", () => cambiar({ contexto: contexto.value }));
+    texto.addEventListener("input", () => cambiar({ texto: texto.value }));
+    const generar = h("button", { class: "primario", onclick: async () => {
+      if (clip?.id !== id) return;
+      generar.disabled = true;
+      generar.textContent = "Buscando temas…";
+      const tema = contexto.value;
+      const base = firma();
+      const anterior = datos().texto || "";
+      const peticion = (peticionesTikTok.get(id) || 0) + 1;
+      peticionesTikTok.set(id, peticion);
+      try {
+        if (!(await vaciar())) return avisar(AVISO_GUARDADO, "error");
+        const resultado = await intentar(() => api("POST", `/clips/${id}/hashtags`, { contexto: tema }));
+        if (!resultado || !vigente() || clip?.id !== id || peticionesTikTok.get(id) !== peticion) return;
+        if ((datos().contexto || "") !== tema || (datos().texto || "") !== anterior || firma() !== base) return avisar("El clip, tema o texto cambió. Vuelve a generar las sugerencias.");
+        sugerenciasTikTok.set(id, resultado);
+        cambiar({ texto: resultado.texto, contexto: tema });
+        if (pestana === "tiktok") pintarDerecha();
+      } finally {
+        generar.disabled = false;
+        generar.textContent = "Recomendar hashtags";
+      }
+    } }, "Recomendar hashtags");
+    const copiar = h("button", { onclick: async () => {
+      if (!texto.value.trim()) return avisar("Primero genera o escribe tus hashtags.");
+      try {
+        await navigator.clipboard.writeText(texto.value.trim());
+        avisar("Hashtags copiados.");
+      } catch {
+        texto.focus(); texto.select();
+        avisar("Texto seleccionado. Pulsa Ctrl+C para copiarlo.");
+      }
+    } }, "Copiar hashtags");
+    const resultado = sugerenciasTikTok.get(id);
+    return h("section", { class: "hashtags-tiktok" },
+      h("h2", {}, "Hashtags para TikTok"),
+      h("p", { class: "tenue pequeno" }, "Sugerencias según el título y el contenido que conserva este clip. Si el juego o tema no se menciona, indícalo para afinar."),
+      h("label", {}, "Juego o tema (opcional)", contexto),
+      h("div", { class: "fila" }, generar),
+      resultado?.necesita_contexto ? h("p", { class: "tenue pequeno", role: "status" }, "No identifiqué un tema concreto. Añade el juego o tema; no puedo reconocerlo solo por la imagen.") : null,
+      h("label", {}, "Hashtags editables", texto),
+      h("div", { class: "fila" }, copiar),
+      h("p", { class: "tenue pequeno" }, "Se guardan con este clip. Vuelve a generar si cambias su contenido. Generar reemplaza el bloque de hashtags."),
+      resultado?.hashtags.length ? h("ul", { class: "motivos" }, resultado.hashtags.map(x => h("li", {}, h("strong", {}, x.etiqueta), " · ", x.motivo))) : null,
+      h("p", { class: "tenue pequeno" }, "Los hashtags no garantizan visitas ni aparecer en Para ti. Son sugerencias temáticas locales, sin datos de tendencias en tiempo real."),
+      h("a", { href: "https://ads.tiktok.com/creative/creativeCenter/trends/hashtag", target: "_blank", rel: "noopener", class: "pequeno" }, "Consultar tendencias en TikTok Creative Center"));
   }
 
   function panelExportar() {
@@ -1011,8 +1361,10 @@ async function vistaEditor(pid, miGeneracion) {
     juego.pause();
     juego.removeAttribute("src");
     juego.load();
+    juegoWeb.removeAttribute("src");
   };
 }
 
 estadoSistema();
+iniciarActualizaciones({ h, api, avisar });
 navegar();

@@ -16,6 +16,7 @@ from pathlib import Path
 from . import config
 
 FIN_FRASE = (".", "?", "!", "…")
+MARGEN_CREDITO = 24   # px entre el credito del fondo y los bordes de la franja del juego
 
 ESTILO_BASE = {
     # Subtitulos
@@ -37,30 +38,45 @@ ESTILO_BASE = {
     "gancho_tamano": 58,
     "gancho_color": "#000000",
     "gancho_fondo": "#FFFFFF",
+    # Marca de agua (nombre del canal, visible durante todo el clip)
+    "marca": "",
+    "marca_posicion": "abajo_derecha",   # arriba_izquierda | arriba_derecha | abajo_izquierda | abajo_derecha
+    "marca_tamano": 34,
+    "marca_opacidad": 70,        # % de opacidad
+    "marca_color": "#FFFFFF",
     # Fondo del encuadre "ajustar"
     "fondo": "difuminado",       # difuminado | difuminado_oscuro | difuminado_gris | color
     "difuminado": 24,            # intensidad del desenfoque del fondo
     "color_fondo": "#000000",
     # Video de juego de abajo (encuadre "dividido")
-    "fondo_juego": "",           # nombre de archivo dentro de la carpeta de fondos; "" = al azar
+    "fondo_juego": "",           # archivo de la carpeta de fondos, o "yt:<id>" (YouTube); "" = al azar
     "juego_proporcion": 45,      # % del alto que ocupa el juego
+    # Credito del autor del fondo (esquina inferior izquierda de la franja del juego)
+    "credito_fondo": False,      # el texto sale del fondo usado; un fondo local no tiene credito
+    "credito_tamano": 28,
 }
 LIMITES = {
     "tamano": (24, 140), "borde": (0, 12), "posicion": (5, 95), "max_caracteres": (8, 42),
     "max_palabras": (1, 8), "gancho_segundos": (0, 600), "gancho_posicion": (4, 90),
     "gancho_tamano": (24, 140), "juego_proporcion": (25, 60), "difuminado": (4, 50),
+    "marca_tamano": (16, 80), "marca_opacidad": (10, 100), "credito_tamano": (16, 60),
 }
-FONDOS = ("difuminado", "difuminado_oscuro", "difuminado_gris", "color")
+MARCA_POSICIONES = ("arriba_izquierda", "arriba_derecha", "abajo_izquierda", "abajo_derecha")
+FONDOS =("difuminado", "difuminado_oscuro", "difuminado_gris", "color")
 # Claves que describen solo el aspecto de los subtitulos (para copiarlas entre clips).
 CLAVES_SUBTITULOS = (
     "tamano", "color", "color_borde", "borde", "posicion", "mayusculas", "caja",
     "max_caracteres", "max_palabras", "resaltar", "color_resalte",
 )
-COLORES = ("color", "color_borde", "color_resalte", "gancho_color", "gancho_fondo", "color_fondo")
-BOOLEANOS = ("mayusculas", "caja", "resaltar")
+COLORES = ("color", "color_borde", "color_resalte", "gancho_color", "gancho_fondo", "color_fondo", "marca_color")
+BOOLEANOS = ("mayusculas", "caja", "resaltar", "credito_fondo")
 # Lo que NO se guarda como preferencia para clips futuros: es propio de cada clip.
 SOLO_DEL_CLIP = ("titulo_gancho",)
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+# Un fondo de YouTube se guarda como "yt:" + id de 11 caracteres. Los dos puntos no pueden
+# estar en un nombre de archivo de Windows, asi que nunca se confunde con un fondo local.
+PREFIJO_FONDO_REMOTO = "yt:"
+_ID_REMOTO = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
 def normalizar_estilo(estilo: dict | None) -> dict:
@@ -83,16 +99,27 @@ def normalizar_estilo(estilo: dict | None) -> dict:
                 final[clave] = valor
         elif clave == "titulo_gancho":
             final[clave] = " ".join(str(valor or "").split())[:80]
+        elif clave == "marca":
+            final[clave] = " ".join(str(valor or "").split())[:40]
+        elif clave == "marca_posicion":
+            if valor in MARCA_POSICIONES:
+                final[clave] = valor
         elif clave == "fondo_juego":
             final[clave] = _nombre_fondo(valor)
     return final
 
 
+def es_id_remoto(valor: object) -> bool:
+    return isinstance(valor, str) and bool(_ID_REMOTO.fullmatch(valor))
+
+
 def _nombre_fondo(valor: object) -> str:
-    """Nombre de archivo simple (sin rutas) del video de fondo; si no lo es, devuelve ""."""
+    """Fondo valido: `yt:<id>` o nombre de archivo simple (sin rutas); si no lo es, devuelve ""."""
+    if isinstance(valor, str) and valor.startswith(PREFIJO_FONDO_REMOTO):
+        return valor if es_id_remoto(valor[len(PREFIJO_FONDO_REMOTO):]) else ""
     if (
         isinstance(valor, str) and 0 < len(valor) <= 150 and valor == Path(valor).name
-        and "/" not in valor and "\\" not in valor and ".." not in valor
+        and "/" not in valor and "\\" not in valor and ".." not in valor and ":" not in valor
     ):
         return valor
     return ""
@@ -267,9 +294,34 @@ def _texto_ass(texto: str) -> str:
     return texto.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ").strip()
 
 
-def tiene_contenido(cues: list[dict], estilo: dict | None) -> bool:
-    """True si hay algo que dibujar sobre el video (subtitulos o titulo gancho)."""
-    return bool(cues) or bool(normalizar_estilo(estilo)["titulo_gancho"])
+def tiene_contenido(cues: list[dict], estilo: dict | None, credito: str = "") -> bool:
+    """True si hay algo que dibujar sobre el video (subtitulos, titulo gancho, marca o credito)."""
+    est = normalizar_estilo(estilo)
+    return bool(cues) or bool(est["titulo_gancho"]) or bool(est["marca"]) or _hay_credito(est, credito)
+
+
+def _texto_credito(credito: str) -> str:
+    return _texto_ass(" ".join(str(credito or "").split())[:100])
+
+
+def _hay_credito(est: dict, credito: str) -> bool:
+    return bool(est["credito_fondo"]) and bool(_texto_credito(credito))
+
+
+def _anclaje_marca(posicion: str, w: int, h: int) -> tuple[int, int, int]:
+    """Alineacion ASS (\\an), x e y de la marca, a 40 px de los bordes."""
+    an = {"arriba_izquierda": 7, "arriba_derecha": 9, "abajo_izquierda": 1, "abajo_derecha": 3}[posicion]
+    x = w - 40 if posicion.endswith("derecha") else 40
+    y = 40 if posicion.startswith("arriba") else h - 40
+    return an, x, y
+
+
+def _alfa_marca(opacidad: int) -> str:
+    """Canal alfa ASS (00 = opaco, FF = transparente) en hexadecimal de dos digitos.
+
+    Redondeo hacia arriba en la mitad (opacidad 70 -> 4D), con enteros para no depender de float.
+    """
+    return f"{(255 * (100 - opacidad) + 50) // 100:02X}"
 
 
 def a_ass(
@@ -278,11 +330,14 @@ def a_ass(
     fin_clip: float,
     estilo: dict | None = None,
     palabras: list[dict] | None = None,
+    credito: str = "",
 ) -> str:
     """Archivo ASS con tiempos relativos al inicio del clip, para un lienzo 1080x1920.
 
     `palabras` son las palabras de la transcripcion (tiempo del video fuente); solo se usan
-    para afinar el resaltado palabra a palabra.
+    para afinar el resaltado palabra a palabra. `credito` es el texto de credito del fondo
+    que se usa en esta exportacion (depende del fondo elegido, por eso no va en el estilo);
+    solo se dibuja si el estilo tiene activado `credito_fondo`.
     """
     est = normalizar_estilo(estilo)
     w, h = config.OUT_W, config.OUT_H
@@ -306,6 +361,8 @@ ScaledBorderAndShadow: yes
 {formato}
 Style: Clip,Arial,{est["tamano"]},{primario},{primario},{borde},&H00000000,-1,0,0,0,100,100,0,0,{estilo_borde},{grosor},0,5,60,60,0,1
 Style: Gancho,Arial,{est["gancho_tamano"]},{_color_ass(est["gancho_color"])},{_color_ass(est["gancho_color"])},{_color_ass(est["gancho_fondo"])},&H00000000,-1,0,0,0,100,100,0,0,3,16,0,5,90,90,0,1
+Style: Marca,Arial,{est["marca_tamano"]},{_color_ass(est["marca_color"])},{_color_ass(est["marca_color"])},&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,5,0,0,0,1
+Style: Credito,Arial,{est["credito_tamano"]},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,1,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -348,5 +405,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         lineas.append(
             f"Dialogue: 1,{_tiempo_ass(0)},{_tiempo_ass(hasta)},Gancho,,0,0,0,,"
             f"{{\\an5\\pos({x},{gy})\\fad(150,200)}}{gancho}"
+        )
+    marca = _texto_ass(est["marca"])
+    if marca and duracion > 0:
+        an, mx, my = _anclaje_marca(est["marca_posicion"], w, h)
+        lineas.append(
+            f"Dialogue: 2,{_tiempo_ass(0)},{_tiempo_ass(duracion)},Marca,,0,0,0,,"
+            f"{{\\an{an}\\pos({mx},{my})\\alpha&H{_alfa_marca(est['marca_opacidad'])}&}}{marca}"
+        )
+    if _hay_credito(est, credito) and duracion > 0:
+        # Esquina inferior izquierda de la franja del juego (que llega hasta el borde inferior), a 24 px.
+        lineas.append(
+            f"Dialogue: 3,{_tiempo_ass(0)},{_tiempo_ass(duracion)},Credito,,0,0,0,,"
+            f"{{\\an1\\pos({MARGEN_CREDITO},{h - MARGEN_CREDITO})}}{_texto_credito(credito)}"
         )
     return cabecera + "\n".join(lineas) + "\n"

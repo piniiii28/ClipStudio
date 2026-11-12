@@ -64,9 +64,9 @@ def _opciones(destino: Path, hook=None) -> dict:
         "max_filesize": config.MAX_UPLOAD_BYTES,
         "overwrites": True,
     }
-    if shutil.which("node"):
+    if node := config.find_tool("node"):
         # YouTube necesita un motor de JavaScript para resolver los formatos.
-        opciones["js_runtimes"] = {"node": {}}
+        opciones["js_runtimes"] = {"node": {"path": node}}
     if config.YTDLP_COOKIES_BROWSER:
         opciones["cookiesfrombrowser"] = (config.YTDLP_COOKIES_BROWSER,)
     if hook:

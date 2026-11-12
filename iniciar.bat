@@ -1,5 +1,5 @@
 @echo off
-rem Arranca ClipStudio y abre el navegador.
+rem Arranca ClipStudio en su propia ventana de escritorio.
 cd /d "%~dp0"
-uv run python -m clipstudio
+uv run python -m clipstudio --escritorio
 pause

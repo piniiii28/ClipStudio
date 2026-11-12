@@ -155,6 +155,18 @@ label span { color: var(--texto); font-variant-numeric: tabular-nums; }
 .franja-juego { position: absolute; left: 0; right: 0; overflow: hidden; background: #2a2a2a; }
 .franja-juego video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; max-width: none; cursor: default; }
 .juego-vacio { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #bbb; font-size: 14px; }
+/* Fondo de YouTube: reproductor incrustado recortado tipo "cover" (el JS fija tamano y posicion); sin interaccion. */
+.franja-juego .juego-web { position: absolute; border: 0; max-width: none; pointer-events: none; background: #000; }
+.juego-vacio[hidden], .juego-web[hidden] { display: none; }
+.credito-vista {
+  position: absolute; pointer-events: none; white-space: nowrap; line-height: 1.1; color: #fff;
+  font-family: Arial, sans-serif; font-weight: 700;
+  text-shadow: 0 0 2px #000, 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000;
+}
+.fondos-remotos { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.fondos-remotos li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.fondos-remotos span { overflow-wrap: anywhere; }
+button.enlace { background: none; border: 0; padding: 0; color: var(--info); text-decoration: underline; cursor: pointer; font-size: 12px; white-space: nowrap; }
 .subtitulo-vista {
   position: absolute; left: 50%; transform: translate(-50%, -50%); width: 89%;
   text-align: center; font-family: Arial, sans-serif; font-weight: 700; line-height: 1.15;
@@ -224,3 +236,70 @@ label span { color: var(--texto); font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) {
   .progreso > div, button, .boton, .aviso { transition: none; animation: none; }
 }
+
+/* ---- marca de agua (nombre del canal, durante todo el clip) ---- */
+.marca-vista {
+  position: absolute; pointer-events: none; white-space: nowrap; line-height: 1.1;
+  font-family: Arial, sans-serif; font-weight: 700;
+  text-shadow: 0 0 2px #000, 0 0 2px #000, 1px 1px 0 #000, -1px -1px 0 #000;
+}
+
+/* ---- modo en vivo ---- */
+.reloj-vivo { font-variant-numeric: tabular-nums; font-size: 22px; }
+.etiqueta.vivo-grabando { color: var(--error); border-color: rgba(242, 114, 114, .6); background: rgba(242, 114, 114, .1); font-weight: 700; }
+.etiqueta.vivo-conectando { color: var(--acento); border-color: rgba(245, 184, 61, .5); background: var(--acento-suave); }
+.etiqueta.vivo-error { color: var(--error); border-color: var(--error); }
+.volumen-vivo { display: block; width: 100%; height: 90px; border-radius: 8px; border: 1px solid var(--borde); }
+.lista-momentos { display: grid; gap: 8px; margin-top: 10px; }
+.momento {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 9px 12px;
+  background: var(--panel-2); border: 1px solid var(--borde); border-radius: 10px;
+}
+.tiempo-momento { font-variant-numeric: tabular-nums; min-width: 56px; }
+
+/* ---- cortes internos ---- */
+.recorte-corte { position: absolute; top: 0; bottom: 0; background: rgba(230, 55, 55, .45); pointer-events: none; }
+.fila-frase { display: flex; align-items: center; gap: 6px; }
+.fila-frase .frase { flex: 1; min-width: 0; }
+.frase-cortada .frase { text-decoration: line-through; opacity: .55; }
+.cue-cortado { opacity: .4; }
+:root { --region-camara: #55e4de; --region-juego: #f2b33d; }
+.selector-stream { position: relative; width: 100%; margin: 12px 0; touch-action: none; cursor: crosshair; overflow: hidden; }
+.selector-stream > img, .selector-stream > canvas { display: block; width: 100%; height: auto; }
+.selector-stream > [hidden] { display: none; }
+.region-stream { position: absolute; box-sizing: border-box; border: 2px solid; pointer-events: none; }
+.region-stream span { position: absolute; top: 0; left: 0; padding: 2px 5px; font-size: 12px; color: #111; }
+.region-camara { border-color: var(--region-camara); z-index: 2; }
+.region-camara span { background: var(--region-camara); }
+.region-juego { border-color: var(--region-juego); }
+.region-juego span { background: var(--region-juego); }
+.telefono > .stream-vista { position: absolute; inset: 0; width: 100%; height: 100%; }
+.encuadre-stream .fila { margin-top: 8px; }
+.hashtags-tiktok { display: grid; gap: 12px; }
+.hashtags-tiktok h2, .hashtags-tiktok p { margin: 0; }
+.hashtags-tiktok input, .hashtags-tiktok textarea { display: block; width: 100%; margin-top: 6px; }
+.hashtags-tiktok textarea {
+  resize: vertical; min-height: 96px; font: inherit; color: var(--texto);
+  background: var(--fondo); border: 1px solid var(--borde);
+  border-radius: var(--radio-ctl); padding: 10px;
+}
+.hashtags-tiktok textarea:hover { border-color: var(--borde-fuerte); }
+.hashtags-tiktok textarea:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
+
+/* ---- actualizaciones ---- */
+.actualizacion { position: relative; }
+.actualizacion-boton { color: var(--tenue); }
+.actualizacion-boton.hay { color: var(--acento); border-color: var(--acento); }
+.actualizacion-panel {
+  position: absolute; right: 0; top: calc(100% + 10px); width: min(380px, 90vw); z-index: 6; padding: 16px;
+  background: var(--panel); border: 1px solid var(--borde-fuerte); border-radius: var(--radio); box-shadow: var(--sombra);
+}
+.actualizacion-panel h3 { margin-top: 12px; color: var(--acento); }
+.notas-actualizacion {
+  margin: 0 0 10px; padding: 8px 10px; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-size: 12px; line-height: 1.5; font-family: inherit; background: var(--fondo); border: 1px solid var(--borde); border-radius: var(--radio-ctl);
+}
+.fila-actualizacion { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0 6px; font-size: 13px; }
+.actualizacion-panel .ok { color: var(--ok); }
+.actualizacion-panel .advertencia { color: var(--acento); }
+.actualizacion-panel .error-texto { color: var(--error); }

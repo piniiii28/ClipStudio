@@ -4,7 +4,15 @@ __pycache__/
 .env
 data/
 .pytest_cache/
+build/
+dist/
+build-*.log
+.pruebas_desktop_pytest/
+.pruebas_hashtags_pytest/
 
 # Analisis de productos de terceros: solo en local, no se publica
 docs/informe-rea.md
 docs/codex/
+
+# Restos de pruebas de un agente (se pueden borrar)
+.pruebas_cortes_*/

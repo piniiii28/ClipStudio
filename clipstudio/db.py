@@ -63,11 +63,31 @@ CREATE TABLE IF NOT EXISTS preferencias (
     clave TEXT PRIMARY KEY,
     valor TEXT NOT NULL                -- JSON
 );
+CREATE TABLE IF NOT EXISTS sesiones_vivo (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    titulo TEXT,
+    estado TEXT NOT NULL,              -- conectando | grabando | detenido | error | interrumpida
+    error TEXT,
+    creado REAL NOT NULL,
+    actualizado REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS momentos_vivo (
+    id TEXT PRIMARY KEY,
+    sesion_id TEXT NOT NULL REFERENCES sesiones_vivo(id) ON DELETE CASCADE,
+    tiempo REAL NOT NULL,              -- segundos desde el inicio de la grabacion
+    motivo TEXT NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'nuevo',   -- nuevo | convertido
+    proyecto_id TEXT,
+    creado REAL NOT NULL,
+    actualizado REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_momentos_sesion ON momentos_vivo(sesion_id);
 CREATE INDEX IF NOT EXISTS idx_clips_proyecto ON clips(proyecto_id);
 CREATE INDEX IF NOT EXISTS idx_exp_proyecto ON exportaciones(proyecto_id);
 """
 
-JSON_FIELDS = {"subtitulos", "estilo", "motivos", "parametros"}
+JSON_FIELDS = {"subtitulos", "estilo", "motivos", "parametros", "cortes", "trayectoria", "composicion", "encuadre_vivo", "tiktok"}
 ACTIVOS = ("en_cola", "procesando")
 
 
@@ -86,7 +106,11 @@ def conectar() -> Iterator[sqlite3.Connection]:
 
 # Columnas anadidas despues de la primera version: se crean si faltan (bases ya existentes).
 COLUMNAS_NUEVAS = {
-    "proyectos": {"min_s": "REAL NOT NULL DEFAULT 15", "max_s": "REAL NOT NULL DEFAULT 60"},
+    "clips": {"cortes": "TEXT NOT NULL DEFAULT '[]'", "trayectoria": "TEXT NOT NULL DEFAULT '[]'",
+              "composicion": "TEXT NOT NULL DEFAULT '{}'", "tiktok": "TEXT NOT NULL DEFAULT '{}'"},
+    "proyectos": {"min_s": "REAL NOT NULL DEFAULT 15", "max_s": "REAL NOT NULL DEFAULT 60",
+                  "es_clip_vivo": "INTEGER NOT NULL DEFAULT 0", "encuadre_vivo": "TEXT NOT NULL DEFAULT '{}'"},
+    "momentos_vivo": {"origen": "TEXT NOT NULL DEFAULT 'audio'", "error": "TEXT"},
 }
 
 

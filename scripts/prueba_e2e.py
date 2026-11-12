@@ -191,17 +191,21 @@ def sincronia(mp4: Path, cues: list[dict], inicio_clip: float, idioma: str | Non
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("video", type=Path)
     ap.add_argument("--url", help="Ademas, prueba la importacion de esta URL")
     ap.add_argument("--conservar", action="store_true", help="No borrar los proyectos de prueba")
+    ap.add_argument("--ejecutable", type=Path, help="Probar una compilacion de escritorio en lugar del Python local")
     args = ap.parse_args()
     if not args.video.is_file():
         print("No existe el video:", args.video)
         return 2
 
     entorno = {**os.environ, "CLIPSTUDIO_PORT": str(PUERTO), "PYTHONIOENCODING": "utf-8"}
-    servidor = subprocess.Popen([sys.executable, "-m", "clipstudio", "--no-abrir"], cwd=RAIZ, env=entorno)
+    comando = [str(args.ejecutable.resolve())] if args.ejecutable else [sys.executable, "-m", "clipstudio"]
+    servidor = subprocess.Popen(comando + ["--no-abrir"], cwd=RAIZ, env=entorno)
     creados: list[str] = []
     salida = SALIDA
     try:
@@ -428,7 +432,11 @@ def main() -> int:
 
         print("10b. Pantalla dividida con video de juego abajo")
         _, fondos = api("GET", "/fondos")
-        comprobar(fondos["fondos"] == [] and Path(fondos["carpeta"]) == config.FONDOS_DIR, "La carpeta de fondos de la prueba empieza vacia")
+        comprobar(fondos["fondos"] == [] and fondos["locales"] == [] and Path(fondos["carpeta"]) == config.FONDOS_DIR, "La carpeta de fondos de la prueba empieza vacia")
+        # Los fondos de YouTube de serie se ocultan: aqui no se prueba la red (eso lo hace prueba_fondos_remotos.py).
+        comprobar(len(fondos["remotos"]) == 2, "El catalogo trae los dos fondos de YouTube de serie")
+        for remoto in fondos["remotos"]:
+            api("DELETE", f"/fondos/remotos/{remoto['id']}")
         codigo, div = api("PATCH", f"/clips/{clip['id']}", {"encuadre": "dividido", "estilo": {"juego_proporcion": 45, "posicion": 55}})
         comprobar(codigo == 200 and div["encuadre"] == "dividido", "El clip acepta el encuadre «dividido»")
         _, e_sin = api("POST", f"/clips/{clip['id']}/exportar")
@@ -528,6 +536,50 @@ def main() -> int:
         # se deja la division en "rellenar" para la prueba de exportar todos
         for c in otros2:
             api("PATCH", f"/clips/{c['id']}", {"encuadre": "rellenar"})
+
+        print("10d. Marca de agua y cortes internos")
+        _, base = api("PATCH", f"/clips/{clip['id']}", {"encuadre": "rellenar", "cortes": [], "estilo": {
+            "marca": "", "caja": False, "tamano": 64, "color": "#FFFFFF", "titulo_gancho": "", "resaltar": False}})
+        sin_marca = exportar_y_esperar(pid, clip["id"])
+        api("PATCH", f"/clips/{clip['id']}", {"estilo": {"marca": "@canal_de_prueba", "marca_posicion": "abajo_derecha",
+                                                        "marca_color": "#FF0000", "marca_opacidad": 100, "marca_tamano": 60}})
+        con_marca = exportar_y_esperar(pid, clip["id"])
+        if comprobar(sin_marca is not None and con_marca is not None, "Exportaciones con y sin marca de agua terminadas"):
+            rojo_m = lambda b, g, r: (r > 190) & (g < 80) & (b < 80)  # noqa: E731
+            m1, m2 = salida / "marca_con.png", salida / "marca_sin.png"
+            fotograma(con_marca, 20.0, m1)
+            fotograma(sin_marca, 20.0, m2)
+            abajo = contar_pixeles(m1, 0.94, 0.995, rojo_m) - contar_pixeles(m2, 0.94, 0.995, rojo_m)
+            arriba = contar_pixeles(m1, 0.0, 0.06, rojo_m) - contar_pixeles(m2, 0.0, 0.06, rojo_m)
+            comprobar(abajo > 1500 and abs(arriba) < 300, f"La marca de agua se ve abajo y no arriba ({abajo} px del color de la marca abajo, {arriba} arriba)")
+        api("PATCH", f"/clips/{clip['id']}", {"estilo": {"marca": ""}})
+
+        # Corte interno: se quitan 10 s del medio y lo que viene despues se adelanta 10 s.
+        c_ini = base["inicio"] + 10.0
+        codigo, cortado = api("PATCH", f"/clips/{clip['id']}", {"cortes": [{"inicio": c_ini, "fin": c_ini + 10.0}]})
+        comprobar(codigo == 200 and len(cortado["cortes"]) == 1, "El clip acepta un corte interno de 10 s")
+        mp4_corte = exportar_y_esperar(pid, clip["id"])
+        if comprobar(mp4_corte is not None, "Exportacion con corte interno terminada"):
+            dur_c = float(ffprobe(mp4_corte)["format"]["duration"])
+            esperado_c = (base["fin"] - base["inicio"]) - 10.0
+            comprobar(abs(dur_c - esperado_c) <= 0.25, f"El MP4 dura {dur_c:.2f} s: la duracion del clip menos el corte ({esperado_c:.2f} s)")
+            despues = [dict(c, inicio=c["inicio"] - 10.0) for c in cortado["subtitulos"] if c["inicio"] >= c_ini + 10.0 and c["texto"] != "TEXTO EDITADO"]
+            antes_c = [c for c in cortado["subtitulos"] if c["fin"] <= c_ini and c["texto"] != "TEXTO EDITADO"]
+            ok_c, total_c = sincronia(mp4_corte, antes_c + despues, base["inicio"], p.get("idioma_detectado"))
+            comprobar(total_c >= 6 and ok_c / total_c >= 0.7,
+                      f"Tras el corte, el audio y los subtitulos siguen sincronizados ({ok_c}/{total_c}; los posteriores al corte se adelantan 10 s)")
+        comprobar(api("PATCH", f"/clips/{clip['id']}", {"cortes": [{"inicio": base["inicio"], "fin": base["fin"]}]})[0] == 422,
+                  "Rechaza cortes que dejarian el clip sin contenido (422)")
+        api("PATCH", f"/clips/{clip['id']}", {"cortes": []})
+        codigo, sil = api("POST", f"/clips/{clip['id']}/quitar-silencios", {"minimo_s": 0.6})
+        quitado = sum(c["fin"] - c["inicio"] for c in sil.get("cortes", []))
+        comprobar(codigo == 200 and len(sil["cortes"]) >= 3 and quitado > 2, f"«Quitar silencios» encuentra {len(sil.get('cortes', []))} pausas ({quitado:.1f} s)")
+        mp4_sil = exportar_y_esperar(pid, clip["id"])
+        if comprobar(mp4_sil is not None, "Exportacion sin silencios terminada"):
+            dur_s = float(ffprobe(mp4_sil)["format"]["duration"])
+            esperado_s = (base["fin"] - base["inicio"]) - quitado
+            comprobar(abs(dur_s - esperado_s) <= 0.1 * len(sil["cortes"]) + 0.3, f"El MP4 sin silencios dura {dur_s:.2f} s (esperado {esperado_s:.2f} s)")
+        api("PATCH", f"/clips/{clip['id']}", {"cortes": []})
 
         print("11. Exportar todos")
         _, antes_todos = api("GET", f"/proyectos/{pid}")
