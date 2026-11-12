@@ -61,7 +61,10 @@ def escribir_version(version: str) -> None:
         (INIT, r'(__version__\s*=\s*")[^"]+(")', rf'\g<1>{version}\g<2>'),
         (PYPROJECT, r'(?m)^(version\s*=\s*")[^"]+(")', rf'\g<1>{version}\g<2>'),
     ):
-        texto = ruta.read_text(encoding="utf-8", newline="")
+        # open(newline="") conserva los saltos de linea originales (read_text no admite
+        # newline hasta Python 3.13).
+        with open(ruta, encoding="utf-8", newline="") as f:
+            texto = f.read()
         cambiado, n = re.subn(patron, nuevo, texto, count=1)
         if n != 1:
             raise SystemExit(f"No se pudo actualizar la version en {ruta.name}.")
