@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/
+.pytest_cache/
+
+# Analisis de productos de terceros: solo en local, no se publica
+docs/informe-rea.md
+docs/codex/
