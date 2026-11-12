@@ -474,6 +474,61 @@ def main() -> int:
                       f"El audio es el del video (se reconocen {ok_d}/{total_d} subtitulos) y el del juego no se mezcla")
         api("PATCH", f"/clips/{clip['id']}", {"encuadre": "rellenar"})
 
+        print("10c. Efectos de fondo y copiar el estilo a todos los clips")
+        import cv2
+        import numpy as np
+
+        def franja_superior(mp4_path: Path, nombre: str):
+            destino_png = salida / nombre
+            fotograma(mp4_path, 3.0, destino_png)
+            img = cv2.imread(str(destino_png)).astype(float)
+            return img[int(1920 * 0.03):int(1920 * 0.25)]
+
+        medidas = {}
+        for efecto in ("difuminado", "difuminado_oscuro", "difuminado_gris"):
+            api("PATCH", f"/clips/{manual['id']}", {"encuadre": "ajustar", "estilo": {"fondo": efecto, "difuminado": 30}})
+            mp4_efecto = exportar_y_esperar(pid, manual["id"])
+            if mp4_efecto is None:
+                continue
+            f = franja_superior(mp4_efecto, f"fondo_{efecto}.png")
+            medidas[efecto] = {"brillo": float(f.mean()), "saturacion": float((f.max(axis=2) - f.min(axis=2)).mean())}
+        comprobar(len(medidas) == 3, "Exportaciones con los tres fondos difuminados terminadas")
+        if len(medidas) == 3:
+            comprobar(medidas["difuminado"]["brillo"] > 25 and medidas["difuminado"]["saturacion"] > 20,
+                      f"El fondo difuminado muestra el video, no negro (brillo {medidas['difuminado']['brillo']:.0f})")
+            comprobar(medidas["difuminado_oscuro"]["brillo"] < medidas["difuminado"]["brillo"] * 0.8,
+                      f"El fondo oscurecido es mas oscuro ({medidas['difuminado_oscuro']['brillo']:.0f} frente a {medidas['difuminado']['brillo']:.0f})")
+            comprobar(medidas["difuminado_gris"]["saturacion"] < 6,
+                      f"El fondo en blanco y negro no tiene color (saturacion {medidas['difuminado_gris']['saturacion']:.1f} frente a {medidas['difuminado']['saturacion']:.0f})")
+
+        api("PATCH", f"/clips/{manual['id']}", {"encuadre": "ajustar", "estilo": {
+            "tamano": 101, "color": "#00FFAA", "caja": True, "fondo": "difuminado_oscuro", "titulo_gancho": "Solo de este clip"}})
+        _, antes_ap = api("GET", f"/proyectos/{pid}")
+        codigo, ap = api("POST", f"/proyectos/{pid}/aplicar-estilo", {"clip_id": manual["id"], "que": "subtitulos"})
+        otros = [c for c in ap["clips"] if c["id"] != manual["id"]]
+        previos = {c["id"]: c for c in antes_ap["clips"]}
+        comprobar(codigo == 200 and ap["aplicados"] == len(otros) and all(
+            c["estilo"]["tamano"] == 101 and c["estilo"]["color"] == "#00FFAA" and c["estilo"]["caja"] for c in otros),
+            f"«Aplicar subtitulos a todos» copia el aspecto del texto a {ap.get('aplicados')} clips")
+        comprobar(all(
+            c["estilo"]["titulo_gancho"] == previos[c["id"]]["estilo"]["titulo_gancho"]
+            and c["estilo"]["fondo"] == previos[c["id"]]["estilo"]["fondo"]
+            and c["encuadre"] == previos[c["id"]]["encuadre"]
+            and c["subtitulos"] == previos[c["id"]]["subtitulos"] for c in otros),
+            "…sin tocar el titulo gancho, el fondo, el encuadre ni el texto de cada clip")
+        codigo, ap2 = api("POST", f"/proyectos/{pid}/aplicar-estilo", {"clip_id": manual["id"], "que": "todo"})
+        otros2 = [c for c in ap2["clips"] if c["id"] != manual["id"]]
+        comprobar(codigo == 200 and all(
+            c["encuadre"] == "ajustar" and c["estilo"]["fondo"] == "difuminado_oscuro"
+            and c["estilo"]["titulo_gancho"] == previos[c["id"]]["estilo"]["titulo_gancho"]
+            and c["recorte_x"] == previos[c["id"]]["recorte_x"] for c in otros2),
+            "«Aplicar estilo y encuadre a todos» copia tambien el fondo y el encuadre, y conserva gancho y recorte")
+        comprobar(api("POST", f"/proyectos/{pid}/aplicar-estilo", {"clip_id": "no-existe", "que": "todo"})[0] == 404,
+                  "Aplicar el estilo de un clip inexistente se rechaza (404)")
+        # se deja la division en "rellenar" para la prueba de exportar todos
+        for c in otros2:
+            api("PATCH", f"/clips/{c['id']}", {"encuadre": "rellenar"})
+
         print("11. Exportar todos")
         _, antes_todos = api("GET", f"/proyectos/{pid}")
         codigo, lote = api("POST", f"/proyectos/{pid}/exportar-todos", {"origen": "division"})

@@ -365,6 +365,40 @@ def exportar_todos(pid: str, datos: ExportarVarios) -> dict:
     return detalle
 
 
+class AplicarEstilo(BaseModel):
+    clip_id: str
+    que: str = "subtitulos"        # 'subtitulos' = solo el aspecto del texto; 'todo' = estilo completo y encuadre
+
+
+@app.post("/api/proyectos/{pid}/aplicar-estilo")
+def aplicar_estilo(pid: str, datos: AplicarEstilo) -> dict:
+    """Copia el estilo de un clip a todos los demas clips del proyecto."""
+    if datos.que not in ("subtitulos", "todo"):
+        raise HTTPException(422, "Opcion no valida.")
+    with _transicion:
+        _proyecto_listo(pid)
+        origen = _clip(datos.clip_id)
+        if origen["proyecto_id"] != pid:
+            raise HTTPException(404, "El clip no pertenece a este proyecto.")
+        claves = (
+            subtitles.CLAVES_SUBTITULOS if datos.que == "subtitulos"
+            else [k for k in subtitles.ESTILO_BASE if k not in subtitles.SOLO_DEL_CLIP]
+        )
+        cambio = {k: origen["estilo"][k] for k in claves}
+        aplicados = 0
+        for c in db.listar("clips", "proyecto_id = ?", (pid,)):
+            if c["id"] == origen["id"]:
+                continue
+            campos = {"estilo": subtitles.normalizar_estilo({**c["estilo"], **cambio})}
+            if datos.que == "todo":
+                campos["encuadre"] = origen["encuadre"]
+            db.actualizar("clips", c["id"], **campos)
+            aplicados += 1
+    detalle = _detalle(pid)
+    detalle["aplicados"] = aplicados
+    return detalle
+
+
 # ---------- preferencias ----------
 
 @app.get("/api/preferencias/clip")

@@ -347,3 +347,27 @@ def test_normalizar_estilo_rechaza_rutas_en_fondo_juego():
     for malo in ("../x.mp4", "a/b.mp4", "a\\b.mp4", "..", "x" * 151 + ".mp4", 123):
         assert subtitles.normalizar_estilo({"fondo_juego": malo})["fondo_juego"] == ""
     assert subtitles.normalizar_estilo({"fondo_juego": "gameplay.mp4"})["fondo_juego"] == "gameplay.mp4"
+
+
+# ---------- efectos de fondo y copia de estilo ----------
+
+def test_filtro_ajustar_con_efectos_de_fondo():
+    base = media.filtro_encuadre("ajustar", 0.5, False, difuminado=12)
+    assert "boxblur=12:2[bg]" in base
+    oscuro = media.filtro_encuadre("ajustar", 0.5, False, efecto_fondo="difuminado_oscuro", difuminado=30)
+    assert "boxblur=30:2,eq=brightness=-0.22[bg]" in oscuro
+    gris = media.filtro_encuadre("ajustar", 0.5, False, efecto_fondo="difuminado_gris")
+    assert "boxblur=24:2,hue=s=0[bg]" in gris
+    # un valor fuera de rango no puede romper el filtro
+    assert "boxblur=50:2" in media.filtro_encuadre("ajustar", 0.5, False, difuminado=9999)
+
+
+def test_estilo_de_fondo_se_valida():
+    e = subtitles.normalizar_estilo({"fondo": "difuminado_gris", "difuminado": 500})
+    assert e["fondo"] == "difuminado_gris" and e["difuminado"] == 50
+    assert subtitles.normalizar_estilo({"fondo": "boxblur=1;drawtext"})["fondo"] == "difuminado"
+
+
+def test_claves_de_subtitulos_no_incluyen_gancho_ni_encuadre():
+    assert set(subtitles.CLAVES_SUBTITULOS) <= set(subtitles.ESTILO_BASE)
+    assert not {"titulo_gancho", "fondo", "fondo_juego", "juego_proporcion"} & set(subtitles.CLAVES_SUBTITULOS)

@@ -431,6 +431,7 @@ def exportar(exportacion_id: str, cancel: Cancelacion) -> None:
             archivo_ass, cancel, prog.tramo(0, 99), pista,
             estilo["color_fondo"] if estilo["fondo"] == "color" else None,
             juego=juego, juego_inicio=juego_inicio, proporcion_juego=estilo["juego_proporcion"],
+            efecto_fondo=estilo["fondo"], difuminado=estilo["difuminado"],
         )
         final = carpeta / f"{exportacion_id}.mp4"
         temporal.replace(final)

@@ -38,7 +38,8 @@ ESTILO_BASE = {
     "gancho_color": "#000000",
     "gancho_fondo": "#FFFFFF",
     # Fondo del encuadre "ajustar"
-    "fondo": "difuminado",       # difuminado | color
+    "fondo": "difuminado",       # difuminado | difuminado_oscuro | difuminado_gris | color
+    "difuminado": 24,            # intensidad del desenfoque del fondo
     "color_fondo": "#000000",
     # Video de juego de abajo (encuadre "dividido")
     "fondo_juego": "",           # nombre de archivo dentro de la carpeta de fondos; "" = al azar
@@ -47,8 +48,14 @@ ESTILO_BASE = {
 LIMITES = {
     "tamano": (24, 140), "borde": (0, 12), "posicion": (5, 95), "max_caracteres": (8, 42),
     "max_palabras": (1, 8), "gancho_segundos": (0, 600), "gancho_posicion": (4, 90),
-    "gancho_tamano": (24, 140), "juego_proporcion": (25, 60),
+    "gancho_tamano": (24, 140), "juego_proporcion": (25, 60), "difuminado": (4, 50),
 }
+FONDOS = ("difuminado", "difuminado_oscuro", "difuminado_gris", "color")
+# Claves que describen solo el aspecto de los subtitulos (para copiarlas entre clips).
+CLAVES_SUBTITULOS = (
+    "tamano", "color", "color_borde", "borde", "posicion", "mayusculas", "caja",
+    "max_caracteres", "max_palabras", "resaltar", "color_resalte",
+)
 COLORES = ("color", "color_borde", "color_resalte", "gancho_color", "gancho_fondo", "color_fondo")
 BOOLEANOS = ("mayusculas", "caja", "resaltar")
 # Lo que NO se guarda como preferencia para clips futuros: es propio de cada clip.
@@ -72,7 +79,7 @@ def normalizar_estilo(estilo: dict | None) -> dict:
         elif clave in BOOLEANOS:
             final[clave] = bool(valor)
         elif clave == "fondo":
-            if valor in ("difuminado", "color"):
+            if valor in FONDOS:
                 final[clave] = valor
         elif clave == "titulo_gancho":
             final[clave] = " ".join(str(valor or "").split())[:80]

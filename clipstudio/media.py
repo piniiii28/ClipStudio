@@ -201,6 +201,8 @@ def filtro_encuadre(
     encuadre: str, recorte_x: float, con_subtitulos: bool, archivo_ass: str = "subs.ass", pista_video: int = 0,
     color_fondo: str | None = None,
     proporcion_juego: int = 45,
+    efecto_fondo: str = "difuminado",
+    difuminado: int = 24,
 ) -> str:
     """Construye el filter_complex para una salida vertical 9:16."""
     w, h = config.OUT_W, config.OUT_H
@@ -223,9 +225,12 @@ def filtro_encuadre(
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=0x{color_fondo.lstrip('#')},setsar=1[v0]"
         )
     elif encuadre == "ajustar":
+        # Fondo: copia del propio video ampliada y desenfocada, opcionalmente oscurecida o en gris.
+        radio = max(4, min(50, int(difuminado)))
+        extra = {"difuminado_oscuro": ",eq=brightness=-0.22", "difuminado_gris": ",hue=s=0"}.get(efecto_fondo, "")
         grafo = (
             f"[0:v:{pista_video}]split=2[fa][fb];"
-            f"[fa]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur=24:2[bg];"
+            f"[fa]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur={radio}:2{extra}[bg];"
             f"[fb]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v0]"
         )
@@ -256,6 +261,8 @@ def exportar_clip(
     juego: Path | None = None,
     juego_inicio: float = 0.0,
     proporcion_juego: int = 45,
+    efecto_fondo: str = "difuminado",
+    difuminado: int = 24,
 ) -> None:
     """Corta [inicio, fin], reencuadra a 1080x1920, quema subtitulos y codifica H.264 + AAC."""
     duracion = fin - inicio
@@ -272,7 +279,7 @@ def exportar_clip(
         entradas += ["-stream_loop", "-1", "-ss", f"{juego_inicio:.3f}", "-i", str(juego)]
     grafo = filtro_encuadre(
         encuadre, recorte_x, archivo_ass is not None, archivo_ass.name if archivo_ass else "",
-        pista_video, color_fondo, proporcion_juego,
+        pista_video, color_fondo, proporcion_juego, efecto_fondo, difuminado,
     )
     ejecutar_ffmpeg(
         [*entradas,

@@ -198,9 +198,10 @@ function vistaProyectos() {
   } }, url, botonUrl);
 
   vista.append(
-    h("h1", {}, "Proyectos"),
-    h("p", { class: "tenue" }, "Sube un video o pega un enlace. Todo se procesa en este equipo."),
-    h("div", { class: "fila", style: "margin-top:12px" }, h("span", {}, "Duración de los clips propuestos: entre"), minClip, "y", maxClip, "segundos",
+    h("div", { class: "portada" },
+      h("h1", {}, "Convierte un video largo en clips verticales"),
+      h("p", { class: "tenue" }, "Sube un video o pega un enlace. Todo se procesa en este equipo: nada sale de él.")),
+    h("div", { class: "fila ajuste-inicial" }, h("span", {}, "Duración de los clips propuestos: entre"), minClip, "y", maxClip, "segundos",
       h("span", { class: "tenue pequeno" }, "(después podrás dividir el video completo en partes iguales)")),
     h("div", { class: "nuevo" },
       h("section", { class: "panel" }, h("h2", {}, "Desde un archivo"), zona, entrada,
@@ -210,6 +211,7 @@ function vistaProyectos() {
         h("div", { class: "fila", style: "margin-top:10px" }, h("span", { class: "tenue pequeno" }, "Idioma hablado:"), idiomaUrl),
         h("p", { class: "tenue pequeno", style: "margin-top:10px" },
           "Funciona con YouTube y otras plataformas compatibles con yt-dlp. Importa solo videos propios o que tengas permiso para usar."))),
+    h("h2", { class: "titulo-lista" }, "Tus proyectos"),
     lista);
 
   async function refrescar() {
@@ -275,7 +277,10 @@ async function vistaEditor(pid, miGeneracion) {
   const subVista = h("div", { class: "subtitulo-vista" }, subInterior);
   const ganchoInterior = h("span", {});
   const ganchoVista = h("div", { class: "gancho-vista", hidden: true }, ganchoInterior);
-  const telefono = h("div", { class: "telefono" }, video, franjaJuego, ganchoVista, subVista);
+  // Fondo del encuadre "ajustar": copia pequena del fotograma actual, ampliada y desenfocada con CSS.
+  const fondoVista = h("canvas", { class: "fondo-vista", width: 90, height: 160, hidden: true, "aria-hidden": "true" });
+  const fondoCtx = fondoVista.getContext("2d");
+  const telefono = h("div", { class: "telefono" }, fondoVista, video, franjaJuego, ganchoVista, subVista);
   const listaClips = h("div", { class: "lista-clips" });
   const panelDerecho = h("div", {});
   const controles = h("div", { class: "controles" });
@@ -390,7 +395,17 @@ async function vistaEditor(pid, miGeneracion) {
     if (!clip) return;
     const dividido = clip.encuadre === "dividido";
     telefono.classList.toggle("ajustar", clip.encuadre === "ajustar");
-    telefono.style.background = clip.encuadre === "ajustar" && clip.estilo.fondo === "color" ? clip.estilo.color_fondo : "";
+    const e = clip.estilo;
+    const conFondoVideo = clip.encuadre === "ajustar" && e.fondo !== "color";
+    telefono.style.background = clip.encuadre === "ajustar" && e.fondo === "color" ? e.color_fondo : "";
+    fondoVista.hidden = !conFondoVideo;
+    if (conFondoVideo) {
+      // El desenfoque se escala al tamano de la vista previa para parecerse al del MP4 (1080x1920).
+      const px = Math.max(2, e.difuminado * telefono.clientHeight / 1920 * 1.4);
+      const extra = e.fondo === "difuminado_oscuro" ? " brightness(0.55)" : e.fondo === "difuminado_gris" ? " grayscale(1)" : "";
+      fondoVista.style.filter = `blur(${px.toFixed(1)}px)${extra}`;
+      pintarFondo();
+    }
     video.removeAttribute("style");
     pintarFranjaJuego();
     if (clip.encuadre === "ajustar") return;
@@ -405,6 +420,14 @@ async function vistaEditor(pid, miGeneracion) {
       const alto = cw / aspecto;
       video.style.cssText = `width:${cw}px;height:${alto}px;left:0;top:${-(alto - F) / 2}px`;
     }
+  }
+  // Dibuja el fotograma actual recortado a 9:16 (cubriendo todo el lienzo) como fondo.
+  function pintarFondo() {
+    if (fondoVista.hidden || video.readyState < 2 || !video.videoWidth) return;
+    const vw = video.videoWidth, vh = video.videoHeight, cw = fondoVista.width, ch = fondoVista.height;
+    const escala = Math.max(cw / vw, ch / vh);
+    const sw = cw / escala, sh = ch / escala;
+    try { fondoCtx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cw, ch); } catch { /* fotograma aun no disponible */ }
   }
   // Muestra u oculta la franja de juego y elige el video que se previsualiza en ella.
   function pintarFranjaJuego() {
@@ -481,6 +504,7 @@ async function vistaEditor(pid, miGeneracion) {
     if (cancelado) return;
     if (clip && !video.paused && video.currentTime >= clip.fin) { video.pause(); video.currentTime = clip.inicio; }
     pintarSubtitulo();
+    pintarFondo();
     moverCabezal();
     marcarCueActivo();
     cuadro = requestAnimationFrame(bucle);
@@ -611,7 +635,9 @@ async function vistaEditor(pid, miGeneracion) {
     listaClips.replaceChildren(...proyecto.clips.map((c) =>
       h("button", { class: "clip-item" + (clip && c.id === clip.id ? " activo" : ""), onclick: () => elegirClip(c) },
         h("strong", {}, c.titulo),
-        h("span", { class: "tenue pequeno" }, `${fmt(c.inicio, 0)} – ${fmt(c.fin, 0)} · ${Math.round(c.fin - c.inicio)} s · ${ORIGENES[c.origen] || "Manual"}`),
+        h("span", { class: "clip-meta" },
+          h("span", { class: "tenue pequeno" }, `${fmt(c.inicio, 0)} – ${fmt(c.fin, 0)} · ${Math.round(c.fin - c.inicio)} s`),
+          h("span", { class: "etiqueta origen-" + (c.origen || "manual") }, ORIGENES[c.origen] || "Manual")),
         c.motivos && c.motivos.length ? h("ul", { class: "motivos" }, c.motivos.map((m) => h("li", {}, m))) : null)));
     if (!proyecto.clips.length) listaClips.append(h("p", { class: "tenue" }, "No hay clips. Crea uno desde la transcripción o con el botón «Nuevo clip»."));
   }
@@ -692,7 +718,7 @@ async function vistaEditor(pid, miGeneracion) {
     };
     const encuadre = h("select", { "aria-label": "Tipo de encuadre" },
       h("option", { value: "rellenar" }, "Rellenar (recorta los lados)"),
-      h("option", { value: "ajustar" }, "Ajustar (video completo con fondo difuminado)"),
+      h("option", { value: "ajustar" }, "Ajustar (video completo con fondo)"),
       h("option", { value: "dividido" }, "Dividido (video arriba y juego abajo)"));
     encuadre.value = clip.encuadre;
     encuadre.addEventListener("change", () => {
@@ -736,7 +762,9 @@ async function vistaEditor(pid, miGeneracion) {
       pintarDerecha();
     });
     const fondo = h("select", { "aria-label": "Fondo del encuadre" },
-      h("option", { value: "difuminado" }, "Fondo: copia difuminada del video"),
+      h("option", { value: "difuminado" }, "Fondo: video difuminado"),
+      h("option", { value: "difuminado_oscuro" }, "Fondo: difuminado y oscurecido"),
+      h("option", { value: "difuminado_gris" }, "Fondo: difuminado en blanco y negro"),
       h("option", { value: "color" }, "Fondo: color sólido"));
     fondo.value = e.fondo;
     fondo.addEventListener("change", () => { estilo({ fondo: fondo.value }); ajustarVideo(); pintarDerecha(); });
@@ -749,40 +777,66 @@ async function vistaEditor(pid, miGeneracion) {
       const r = await intentar(() => api("PUT", "/preferencias/clip", { estilo: clip.estilo, encuadre: clip.encuadre }));
       if (r) avisar("Guardado: los clips nuevos nacerán con este estilo y encuadre.");
     } }, "Usar este estilo en los clips nuevos");
+    // Copia el estilo de este clip a todos los demas del proyecto.
+    const aplicarATodos = (que, texto, pregunta) => h("button", { disabled: proyecto.clips.length < 2, onclick: async (ev) => {
+      const boton = ev.currentTarget, id = clip.id;
+      if (!confirm(pregunta)) return;
+      boton.disabled = true;
+      if (!(await vaciar())) { boton.disabled = false; return avisar(AVISO_GUARDADO, "error"); }
+      const p = await intentar(() => api("POST", `/proyectos/${pid}/aplicar-estilo`, { clip_id: id, que }));
+      boton.disabled = false;
+      if (!p) return;
+      // Se actualizan los mismos objetos de clip para no perder la seleccion actual.
+      for (const nuevo of p.clips) {
+        const local = proyecto.clips.find((c) => c.id === nuevo.id);
+        if (local) { local.estilo = nuevo.estilo; local.encuadre = nuevo.encuadre; }
+      }
+      pintarClips(); ajustarVideo();
+      avisar(`Estilo aplicado a ${p.aplicados} clip(s).`);
+    } }, texto);
+    const otros = Math.max(0, proyecto.clips.length - 1);
     const ancho = proyecto.ancho / proyecto.alto > 9 / 16;
     const recorteVisible = (clip.encuadre === "rellenar" || clip.encuadre === "dividido") && ancho;
-    return h("div", {},
-      h("h2", {}, "Encuadre 9:16"),
-      h("div", { class: "campo" }, encuadre),
-      bloqueDividido,
-      recorteVisible ? rango("Posición horizontal del recorte (0 izquierda – 100 derecha)", "recorte_x", 0, 100, clip,
-        (v) => { guardar({ recorte_x: v / 100 }); ajustarVideo(); }) : null,
-      recorteVisible ? h("div", { class: "campo" }, h("button", { onclick: async () => {
-        const r = await operar("encuadre-auto", ["recorte_x", "encuadre"]);
-        if (!r) return;
-        if (!r.detectado) return avisar("No se detectó un rostro de frente en este fragmento. Ajusta la posición a mano.");
-        ajustarVideo(); pintarDerecha(); avisar("Encuadre centrado en el rostro detectado.");
-      } }, "Centrar en el rostro")) : null,
-      clip.encuadre === "ajustar" ? h("div", { class: "campo fila" }, fondo, e.fondo === "color" ? color("Color", "color_fondo", ajustarVideo) : null) : null,
-      clip.encuadre === "ajustar" && e.fondo === "difuminado" ? h("p", { class: "tenue pequeno" }, "La vista previa muestra el fondo en negro; en el MP4 exportado el fondo es una copia difuminada del video.") : null,
-      h("h2", { style: "margin-top:18px" }, "Estilo de subtítulos"),
-      h("div", { class: "campo" }, preajuste),
-      rango("Tamaño", "tamano", 24, 140),
-      rango("Altura en pantalla (% desde arriba)", "posicion", 5, 95),
-      e.caja ? null : rango("Grosor del borde", "borde", 0, 12),
-      h("div", { class: "fila campo" }, color("Texto", "color"), color(e.caja ? "Caja" : "Borde", "color_borde"),
-        e.resaltar ? color("Resalte", "color_resalte") : null),
-      h("div", { class: "fila campo", style: "gap:16px" }, casilla("Mayúsculas", "mayusculas"), casilla("Caja de fondo", "caja", true), casilla("Resaltar la palabra dicha", "resaltar", true)),
-      rango("Palabras por subtítulo (se aplica al pulsar Regenerar)", "max_palabras", 1, 8),
-      rango("Letras por subtítulo (se aplica al pulsar Regenerar)", "max_caracteres", 8, 42),
-      h("h2", { style: "margin-top:18px" }, "Título gancho"),
-      h("div", { class: "campo" }, gancho),
-      e.titulo_gancho ? rango("Segundos en pantalla (0 = todo el clip)", "gancho_segundos", 0, 30) : null,
-      e.titulo_gancho ? rango("Altura en pantalla (% desde arriba)", "gancho_posicion", 4, 90) : null,
-      e.titulo_gancho ? rango("Tamaño", "gancho_tamano", 24, 140) : null,
-      e.titulo_gancho ? h("div", { class: "fila campo" }, color("Texto", "gancho_color"), color("Fondo", "gancho_fondo")) : null,
-      h("div", { class: "campo", style: "margin-top:16px" }, predeterminado),
-      h("p", { class: "tenue pequeno" }, "La vista previa es aproximada: el MP4 usa la fuente Arial en negrita y puede variar ligeramente el ajuste de línea y el momento exacto del resaltado."));
+    const seccion = (titulo, ...hijos) => h("section", { class: "seccion" }, h("h3", {}, titulo), ...hijos);
+    return h("div", { class: "secciones" },
+      seccion("Encuadre 9:16",
+        h("div", { class: "campo" }, encuadre),
+        bloqueDividido,
+        recorteVisible ? rango("Posición horizontal del recorte (0 izquierda – 100 derecha)", "recorte_x", 0, 100, clip,
+          (v) => { guardar({ recorte_x: v / 100 }); ajustarVideo(); }) : null,
+        recorteVisible ? h("div", { class: "campo" }, h("button", { onclick: async () => {
+          const r = await operar("encuadre-auto", ["recorte_x", "encuadre"]);
+          if (!r) return;
+          if (!r.detectado) return avisar("No se detectó un rostro de frente en este fragmento. Ajusta la posición a mano.");
+          ajustarVideo(); pintarDerecha(); avisar("Encuadre centrado en el rostro detectado.");
+        } }, "Centrar en el rostro")) : null,
+        clip.encuadre === "ajustar" ? h("div", { class: "campo fila" }, fondo, e.fondo === "color" ? color("Color", "color_fondo", ajustarVideo) : null) : null,
+        clip.encuadre === "ajustar" && e.fondo !== "color"
+          ? rango("Intensidad del difuminado", "difuminado", 4, 50, e, (v) => { estilo({ difuminado: v }); ajustarVideo(); }) : null),
+      seccion("Subtítulos",
+        h("div", { class: "campo" }, preajuste),
+        rango("Tamaño", "tamano", 24, 140),
+        rango("Altura en pantalla (% desde arriba)", "posicion", 5, 95),
+        e.caja ? null : rango("Grosor del borde", "borde", 0, 12),
+        h("div", { class: "fila campo" }, color("Texto", "color"), color(e.caja ? "Caja" : "Borde", "color_borde"),
+          e.resaltar ? color("Resalte", "color_resalte") : null),
+        h("div", { class: "fila campo", style: "gap:16px" }, casilla("Mayúsculas", "mayusculas"), casilla("Caja de fondo", "caja", true), casilla("Resaltar la palabra dicha", "resaltar", true)),
+        rango("Palabras por subtítulo (se aplica al pulsar Regenerar)", "max_palabras", 1, 8),
+        rango("Letras por subtítulo (se aplica al pulsar Regenerar)", "max_caracteres", 8, 42)),
+      seccion("Título gancho",
+        h("div", { class: "campo" }, gancho),
+        e.titulo_gancho ? rango("Segundos en pantalla (0 = todo el clip)", "gancho_segundos", 0, 30) : null,
+        e.titulo_gancho ? rango("Altura en pantalla (% desde arriba)", "gancho_posicion", 4, 90) : null,
+        e.titulo_gancho ? rango("Tamaño", "gancho_tamano", 24, 140) : null,
+        e.titulo_gancho ? h("div", { class: "fila campo" }, color("Texto", "gancho_color"), color("Fondo", "gancho_fondo")) : null),
+      seccion("Aplicar a otros clips",
+        h("div", { class: "botones-columna" },
+          aplicarATodos("subtitulos", `Aplicar estos subtítulos a todos los clips (${otros})`,
+            `El tamaño, los colores, la posición y el resto del aspecto de los subtítulos de este clip se copiarán a los otros ${otros} clips. El texto de cada clip no cambia. ¿Continuar?`),
+          aplicarATodos("todo", `Aplicar estilo y encuadre a todos los clips (${otros})`,
+            `El estilo completo (subtítulos, fondo, pantalla dividida) y el tipo de encuadre de este clip se copiarán a los otros ${otros} clips. El título gancho y la posición del recorte de cada clip no cambian. ¿Continuar?`),
+          predeterminado),
+        h("p", { class: "tenue pequeno", style: "margin-top:10px" }, "La vista previa es aproximada: el MP4 usa la fuente Arial en negrita y puede variar ligeramente el ajuste de línea, el desenfoque del fondo y el momento exacto del resaltado.")));
   }
 
   function panelTranscripcion() {
@@ -928,12 +982,17 @@ async function vistaEditor(pid, miGeneracion) {
     h("div", { class: "editor-cabecera" }, h("a", { class: "boton", href: "#/" }, "← Proyectos"), h("h1", {}, proyecto.nombre),
       h("span", { class: "tenue pequeno" }, `${fmtDuracion(proyecto.duracion)} · ${proyecto.ancho}×${proyecto.alto}` + (proyecto.idioma_detectado ? ` · idioma: ${proyecto.idioma_detectado}` : ""))),
     h("div", { class: "editor" },
-      h("section", { class: "panel" }, h("h2", {}, "Clips"), listaClips,
-        h("div", { style: "margin-top:12px;display:grid;gap:8px" }, nuevoClip, borrarClip,
-          h("div", { class: "fila pequeno tenue" }, "Entre", minS, "y", maxS, "s", proponer),
-          h("p", { class: "tenue pequeno" }, "Las propuestas se eligen por pausas, cierres de frase, ritmo del habla y picos de volumen. No miden interés ni predicen resultados."),
-          h("div", { class: "fila pequeno tenue" }, "Partes de", parteS, "s", dividir),
-          h("label", { class: "fila pequeno", style: "margin:0" }, enPausas, "Mover cada corte a la pausa más cercana para no partir frases"))),
+      h("section", { class: "panel panel-clips" }, h("h2", {}, "Clips"), listaClips,
+        h("div", { class: "herramientas" },
+          h("div", { class: "botones-columna" }, nuevoClip, borrarClip),
+          h("div", { class: "grupo" },
+            h("h3", {}, "Proponer clips"),
+            h("div", { class: "fila pequeno" }, "Entre", minS, "y", maxS, "s", proponer),
+            h("p", { class: "tenue pequeno" }, "Se eligen por pausas, cierres de frase, ritmo del habla y picos de volumen. No miden interés ni predicen resultados.")),
+          h("div", { class: "grupo" },
+            h("h3", {}, "Dividir el video completo"),
+            h("div", { class: "fila pequeno" }, "Partes de", parteS, "s", dividir),
+            h("label", { class: "fila pequeno", style: "margin:6px 0 0" }, enPausas, "Mover cada corte a la pausa más cercana para no partir frases")))),
       h("section", { class: "centro" }, h("div", { class: "fila", style: "width:100%;max-width:560px" }, h("label", { style: "margin:0" }, "Título"), titulo), telefono, controles),
       h("section", { class: "panel" }, panelDerecho)));
 
