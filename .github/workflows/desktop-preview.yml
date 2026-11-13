@@ -17,10 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      CLIPSTUDIO_DATA_DIR: ${{ runner.temp }}/clipstudio-tests
       CLIPSTUDIO_BUSCAR_ACTUALIZACIONES: '0'
     steps:
       - uses: actions/checkout@v4
+      - name: Isolate test data
+        run: echo "CLIPSTUDIO_DATA_DIR=$RUNNER_TEMP/clipstudio-tests" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
@@ -39,10 +40,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     env:
-      CLIPSTUDIO_DATA_DIR: ${{ runner.temp }}\clipstudio-tests
       CLIPSTUDIO_BUSCAR_ACTUALIZACIONES: '0'
     steps:
       - uses: actions/checkout@v4
+      - name: Isolate test data
+        shell: pwsh
+        run: '"CLIPSTUDIO_DATA_DIR=$env:RUNNER_TEMP\clipstudio-tests" | Out-File -FilePath $env:GITHUB_ENV -Append'
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
