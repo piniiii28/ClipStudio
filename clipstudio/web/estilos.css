@@ -398,3 +398,7 @@ button.enlace { background: none; border: 0; padding: 0; color: var(--info); tex
   .actualizacion { position: static; }
   .actualizacion-panel { top: calc(100% + 6px); right: 8px; }
 }
+
+.atajos-editor { color: var(--tenue); font-size: 12px; }
+.atajos-editor summary { cursor: pointer; }
+.atajos-editor p { margin: 4px 0 0; }
