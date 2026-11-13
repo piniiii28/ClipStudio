@@ -65,6 +65,16 @@ export function vistaVivo(ctx) {
   const lienzo = h("canvas", { class: "volumen-vivo", width: 720, height: 90, "aria-label": "Volumen de los últimos 2 minutos" });
   const botonesUltimos = [30, 60, 90].map((n) =>
     h("button", { class: "primario", onclick: () => crearClip({ segundos: n }, `últimos ${n} s`) }, `Clip de los últimos ${n} s`));
+  const nota = h("input", { maxLength: 160, placeholder: "Nota del momento (opcional)", "aria-label": "Nota del marcador" });
+  const marcar = h("button", { onclick: async () => {
+    if (!sesion || marcar.disabled) return;
+    marcar.disabled = true;
+    const r = await intentar(() => api("POST", `/vivo/${sesion.id}/momentos`, { nota: nota.value.trim() }));
+    if (r && vigente()) { nota.value = ""; avisar("Momento marcado sobre el último vídeo grabado."); }
+    if (vigente()) { await consultar(); pintar(); }
+  } }, "Marcar momento");
+  const filtroMomentos = h("select", { "aria-label": "Filtrar momentos", onchange: () => { claveMomentos = ""; pintarMomentos(); } },
+    ...[["todos", "Todos"], ["pendientes", "Pendientes"], ["manual", "Manuales"], ["chat", "Chat"], ["audio", "Audio"]].map(([value, label]) => h("option", { value }, label)));
   const listaMomentos = h("div", { class: "lista-momentos" });
   const enlaceClip = h("p", { class: "pequeno", hidden: true });
   const botonParar = h("button", { class: "peligro", onclick: parar }, "Parar");
@@ -98,7 +108,8 @@ export function vistaVivo(ctx) {
       esperaImagen, selector.elemento,
       h("div", { class: "fila", style: "margin-top:12px" }, aplicarEncuadre, estadoEncuadre)),
     h("section", { class: "panel" },
-      h("h2", {}, "Momentos detectados"),
+      h("h2", {}, "Momentos"),
+      h("div", { class: "fila" }, nota, marcar, filtroMomentos),
       h("p", { class: "tenue pequeno" }, "Se marcan subidas de volumen y aumentos de actividad del chat respecto al minuto anterior."),
       listaMomentos),
     h("section", { class: "panel" },
@@ -154,8 +165,10 @@ export function vistaVivo(ctx) {
   }
 
   function pintarMomentos() {
-    const momentos = [...(sesion.momentos || [])].reverse();
-    const clave = momentos.map((m) => m.id + m.estado).join() + "|" + ocupado;
+    const momentos = [...(sesion.momentos || [])].reverse().filter((m) =>
+      filtroMomentos.value === "todos" || (filtroMomentos.value === "pendientes"
+        ? !m.proyecto_id && !m.caducado : m.origen === filtroMomentos.value));
+    const clave = momentos.map((m) => m.id + m.estado + m.caducado).join() + "|" + ocupado;
     if (clave === claveMomentos) return;
     claveMomentos = clave;
     listaMomentos.replaceChildren(...(momentos.length ? momentos.map((m) =>
@@ -163,9 +176,10 @@ export function vistaVivo(ctx) {
         h("strong", { class: "tiempo-momento" }, fmtReloj(m.tiempo)),
         h("span", { class: "crece" }, m.motivo),
         m.error ? h("span", { class: "mensaje-error pequeno" }, m.error) : null,
-        m.estado === "convertido" ? h("a", { href: "#/" }, "Ver clip en Proyectos") :
+        m.estado === "convertido" ? h("a", { href: `#/p/${m.proyecto_id}` }, "Abrir clip") :
           ["esperando_video", "creando"].includes(m.estado)
             ? h("span", { class: "etiqueta" }, m.estado === "creando" ? "Creando clip…" : "Esperando vídeo…")
+            : m.caducado ? h("span", { class: "etiqueta" }, "Fuera del búfer")
             : h("button", { disabled: ocupado, onclick: () => crearClip({ momento_id: m.id }, `momento ${fmtReloj(m.tiempo)}`) }, "Crear clip")))
       : [h("p", { class: "tenue" }, "Todavía no se ha detectado ningún momento.")]));
   }
@@ -223,10 +237,11 @@ export function vistaVivo(ctx) {
       g.fillRect((120 - actividad.length + i) * 6, actividadChat.height - alto, 5, alto);
     });
     const puede = !ocupado && sesion.cobertura_s >= 5;
+    marcar.disabled = sesion.estado !== "grabando" || !sesion.n_segmentos;
     botonesUltimos.forEach((b) => { b.disabled = !puede; });
     enlaceClip.hidden = !ultimoClip;
     if (ultimoClip) {
-      enlaceClip.replaceChildren(`Clip creado: «${ultimoClip.nombre}». `, h("a", { href: "#/" }, "Ver en Proyectos"));
+      enlaceClip.replaceChildren(`Clip creado: «${ultimoClip.nombre}». `, h("a", { href: `#/p/${ultimoClip.proyecto_id}` }, "Abrir clip"));
     }
     pintarMomentos();
     dibujar();

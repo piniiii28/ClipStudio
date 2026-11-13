@@ -451,7 +451,7 @@ class Sesion:
             momento_chat["tiempo"] = max(0, momento_chat["tiempo"] - self.desfase_chat_s)
             self._registrar_momento(momento_chat, "chat")
 
-    def _registrar_momento(self, momento: dict, origen: str) -> None:
+    def _registrar_momento(self, momento: dict, origen: str) -> dict | None:
         automatico = origen == "chat" and self.automaticos
         estado = "esperando_video" if automatico else "nuevo"
         try:
@@ -462,7 +462,7 @@ class Sesion:
             )
         except Exception:
             log.error("No se pudo guardar el momento", exc_info=True)
-            return
+            return None
         with self.lock:
             self.momentos.append({
                 "id": fila["id"], "tiempo": momento["tiempo"], "motivo": momento["motivo"],
@@ -473,6 +473,18 @@ class Sesion:
                 self._clips_pendientes.put_nowait(fila["id"])
             except queue.Full:
                 self._estado_momento(fila["id"], estado="error", error="La cola automática está llena. Puedes crear este clip manualmente.")
+
+        return dict(fila)
+
+    def marcar_momento(self, nota: str) -> dict:
+        with self.lock:
+            if self.estado != "grabando" or not self.segmentos:
+                raise ErrorMedia("Espera a que haya vídeo grabado para marcar un momento.")
+            tiempo = max(s.fin for s in self.segmentos)
+            fila = self._registrar_momento({"tiempo": tiempo, "motivo": nota.strip() or "Marcador manual"}, "manual")
+            if fila is None:
+                raise ErrorMedia("No se pudo guardar el momento. Inténtalo de nuevo.")
+            return fila
 
     def _estado_chat(self, estado: str, error: str | None) -> None:
         with self.lock:
@@ -698,7 +710,10 @@ class Sesion:
                 "buffer_min": config.VIVO_BUFER_MIN,
                 "estimado_buffer_gb": estimado,
                 "volumen": self.db[-VOLUMEN_MOSTRADO_S:],
-                "momentos": [dict(m) for m in self.momentos],
+                "buffer_inicio_s": min((s.inicio for s in self.segmentos), default=0.0),
+                "momentos": [{**m, "caducado": not m.get("proyecto_id") and
+                              m["tiempo"] < min((s.inicio for s in self.segmentos), default=0.0)}
+                             for m in self.momentos],
                 "pid": self.proc.pid if self.proc else None,
                 "chat_estado": self.estado_chat,
                 "chat_error": self.error_chat,
@@ -921,6 +936,18 @@ def cambiar_encuadre(sid: str, datos: EncuadreVivo) -> dict:
     return s.publico()
 
 
+class MarcadorVivo(BaseModel):
+    nota: str = Field("", max_length=160)
+
+
+@router.post("/{sid}/momentos", status_code=201)
+def marcar_momento(sid: str, datos: MarcadorVivo) -> dict:
+    try:
+        return _sesion_por_id(sid).marcar_momento(datos.nota)
+    except ErrorMedia as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/{sid}/clip", status_code=201)
 def crear_clip(sid: str, datos: ClipVivo) -> dict:
     s = _sesion_por_id(sid)
@@ -933,6 +960,9 @@ def crear_clip(sid: str, datos: ClipVivo) -> dict:
                 momento = next((m for m in s.momentos if m["id"] == datos.momento_id), None)
             if momento is None:
                 raise HTTPException(404, "Ese momento no existe.")
+            with s.lock:
+                if not momento.get("proyecto_id") and momento["tiempo"] < min((seg.inicio for seg in s.segmentos), default=0.0):
+                    raise ErrorMedia("Ese momento ya está fuera del búfer.")
             proyecto = s.convertir_momento(datos.momento_id)
         else:
             if datos.segundos not in ULTIMOS_S:
