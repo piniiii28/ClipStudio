@@ -4,8 +4,12 @@ Formato: una entrada por versión publicada, con lo añadido, lo corregido y lo 
 que falta. El detalle técnico y las pruebas de cada función están en
 [docs/estado.md](docs/estado.md).
 
-## Próxima versión — sin publicar
+## 0.2.1 — 2026-11-13
 
+- Interfaz rediseñada.
+- Subtítulos: exportar a SRT. Clips: duplicar y atajos de teclado en el editor.
+- Tendencias de YouTube, selección de la pista de audio (doblajes) y posiciones de encuadre.
+- Seguimiento facial y controles de vista previa mejorados.
 - Directos: marcadores manuales con nota, filtros por origen y pendientes, aviso de
   momentos fuera del búfer y acceso directo al proyecto creado.
 - La captura de los últimos segundos muestra la duración realmente disponible;
