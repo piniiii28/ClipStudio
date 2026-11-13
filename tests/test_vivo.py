@@ -191,3 +191,29 @@ def test_momentos_caducados_y_convertidos(sesion_marcadores):
     publico = s.publico()
     assert publico["buffer_inicio_s"] == 30
     assert [m["caducado"] for m in publico["momentos"]] == [True, False, False]
+
+
+def test_recorte_rechaza_huecos_pero_tolera_redondeo_de_segmentos():
+    with pytest.raises(ErrorMedia, match="Falta vídeo"):
+        vivo.plan_recorte([Seg("a.ts", 0, 6, 1), Seg("b.ts", 12, 18, 1)], 0, 18)
+    cubiertos, desfase, duracion = vivo.plan_recorte([Seg("a.ts", 0, 6, 1), Seg("b.ts", 6.001, 12, 1)], 0, 12)
+    assert len(cubiertos) == 2 and desfase == 0 and duracion == 12
+
+
+def test_api_marcador_valida_nota_y_sesion_y_rechaza_caducado(sesion_marcadores, monkeypatch):
+    from fastapi.testclient import TestClient
+    from clipstudio.api import app
+    s = sesion_marcadores
+    monkeypatch.setattr(vivo, "sesion_actual", lambda: s)
+    cliente = TestClient(app, base_url="http://localhost")
+    assert cliente.post("/api/vivo/otra/momentos", json={}).status_code == 404
+    assert cliente.post("/api/vivo/prueba/momentos", json={"nota": "x" * 161}).status_code == 422
+    respuesta = cliente.post("/api/vivo/prueba/momentos", json={"nota": " "})
+    assert respuesta.status_code == 201
+    assert respuesta.json()["motivo"] == "Marcador manual"
+    s.momentos.append({"id": "caducado", "tiempo": 10, "proyecto_id": None})
+    s.segmentos = SEGS[5:]
+    respuesta = cliente.post("/api/vivo/prueba/clip", json={"momento_id": "caducado"})
+    assert respuesta.status_code == 409 and "fuera del búfer" in respuesta.json()["detail"]
+    s.estado = "detenido"
+    assert cliente.post("/api/vivo/prueba/momentos", json={}).status_code == 409

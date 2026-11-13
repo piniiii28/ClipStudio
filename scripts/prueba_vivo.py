@@ -107,6 +107,12 @@ def generar_video(destino: Path) -> None:
 
 
 def proceso_vivo(pid: int) -> bool:
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
     out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True).stdout
     return f'"{pid}"' in out
 
@@ -176,7 +182,13 @@ def main() -> int:
             comprobar(abs(m["tiempo"] - SEGUNDO_ESTALLIDO) <= 3, f"El momento esta cerca del estallido (t={m['tiempo']:.0f} s, esperado ~{SEGUNDO_ESTALLIDO})")
             comprobar("Pico de volumen" in m["motivo"], f"Motivo: «{m['motivo']}»")
 
-        print("4. Clips")
+        print("4. Marcadores y clips")
+        codigo, marcador = api("POST", f"/vivo/{sid}/momentos", {"nota": "  Buena jugada  "})
+        comprobar(codigo == 201, "Marcador manual creado (201)")
+        if codigo == 201:
+            comprobar(marcador["origen"] == "manual" and marcador["motivo"] == "Buena jugada", "El marcador conserva origen y nota")
+            comprobar(marcador["estado"] == "nuevo", "El marcador no crea un clip automático")
+        comprobar(api("POST", f"/vivo/{sid}/momentos", {"nota": "x" * 161})[0] == 422, "La nota del marcador tiene un límite")
         s = esperar(lambda: (lambda x: x if x and x["cobertura_s"] >= 40 else None)(api("GET", "/vivo")[1]), 40)
         comprobar(s is not None, "Hay al menos 40 s de segmentos cerrados")
         codigo, r = api("POST", f"/vivo/{sid}/clip", {"segundos": 45})

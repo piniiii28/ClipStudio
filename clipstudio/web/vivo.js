@@ -238,7 +238,12 @@ export function vistaVivo(ctx) {
     });
     const puede = !ocupado && sesion.cobertura_s >= 5;
     marcar.disabled = sesion.estado !== "grabando" || !sesion.n_segmentos;
-    botonesUltimos.forEach((b) => { b.disabled = !puede; });
+    botonesUltimos.forEach((b, i) => {
+      b.disabled = !puede;
+      const pedido = [30, 60, 90][i];
+      const disponibles = Math.floor(Math.max(0, sesion.cobertura_s - (sesion.buffer_inicio_s || 0)));
+      b.textContent = disponibles < pedido ? `Clip de ${disponibles} s disponibles (máx. ${pedido} s)` : `Clip de los últimos ${pedido} s`;
+    });
     enlaceClip.hidden = !ultimoClip;
     if (ultimoClip) {
       enlaceClip.replaceChildren(`Clip creado: «${ultimoClip.nombre}». `, h("a", { href: `#/p/${ultimoClip.proyecto_id}` }, "Abrir clip"));

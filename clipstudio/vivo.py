@@ -197,6 +197,8 @@ def plan_recorte(segmentos: list[Seg], a: float, b: float) -> tuple[list[Seg], f
     cubiertos = segmentos_que_cubren(segmentos, a, b)
     if not cubiertos:
         raise ErrorMedia("Ese tramo ya no está en el búfer o todavía no se ha grabado.")
+    if any(siguiente.inicio - previo.fin > .1 for previo, siguiente in zip(cubiertos, cubiertos[1:])):
+        raise ErrorMedia("Falta vídeo en ese tramo del búfer. Elige un momento posterior a la interrupción.")
     a = max(a, cubiertos[0].inicio)
     b = min(b, cubiertos[-1].fin)
     if b - a < MIN_CLIP_S:
@@ -560,6 +562,8 @@ class Sesion:
                     proyecto = db.obtener("proyectos", momento["proyecto_id"])
                     if proyecto:
                         return proyecto
+                if momento["tiempo"] < min((seg.inicio for seg in self.segmentos), default=0.0):
+                    raise ErrorMedia("Ese momento ya está fuera del búfer.")
                 a, b = max(0.0, momento["tiempo"] - ANTES_S), momento["tiempo"] + DESPUES_S
             self.esperar_cobertura(b, ESPERA_POSTERIOR_S)
             if self.parar.is_set():
@@ -960,9 +964,6 @@ def crear_clip(sid: str, datos: ClipVivo) -> dict:
                 momento = next((m for m in s.momentos if m["id"] == datos.momento_id), None)
             if momento is None:
                 raise HTTPException(404, "Ese momento no existe.")
-            with s.lock:
-                if not momento.get("proyecto_id") and momento["tiempo"] < min((seg.inicio for seg in s.segmentos), default=0.0):
-                    raise ErrorMedia("Ese momento ya está fuera del búfer.")
             proyecto = s.convertir_momento(datos.momento_id)
         else:
             if datos.segundos not in ULTIMOS_S:
