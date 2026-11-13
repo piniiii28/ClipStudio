@@ -109,7 +109,7 @@ COLUMNAS_NUEVAS = {
     "clips": {"cortes": "TEXT NOT NULL DEFAULT '[]'", "trayectoria": "TEXT NOT NULL DEFAULT '[]'",
               "composicion": "TEXT NOT NULL DEFAULT '{}'", "tiktok": "TEXT NOT NULL DEFAULT '{}'"},
     "proyectos": {"min_s": "REAL NOT NULL DEFAULT 15", "max_s": "REAL NOT NULL DEFAULT 60",
-                  "es_clip_vivo": "INTEGER NOT NULL DEFAULT 0", "encuadre_vivo": "TEXT NOT NULL DEFAULT '{}'"},
+                  "audio_idioma": "TEXT", "es_clip_vivo": "INTEGER NOT NULL DEFAULT 0", "encuadre_vivo": "TEXT NOT NULL DEFAULT '{}'"},
     "momentos_vivo": {"origen": "TEXT NOT NULL DEFAULT 'audio'", "error": "TEXT"},
 }
 

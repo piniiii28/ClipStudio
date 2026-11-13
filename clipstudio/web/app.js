@@ -105,13 +105,15 @@ function navegar() {
   if (limpiarVista) { limpiarVista(); limpiarVista = null; }
   vista.replaceChildren();
   const enVivo = location.hash === "#/vivo";
+  const enYouTube = location.hash === "#/youtube";
   const m = location.hash.match(/^#\/p\/([0-9a-f]{32})$/);
-  vista.className = enVivo ? "vista-vivo" : m ? "vista-editor" : "vista-proyectos";
+  vista.className = enVivo || enYouTube ? "vista-vivo" : m ? "vista-editor" : "vista-proyectos";
   for (const enlace of document.querySelectorAll(".barra nav a")) {
-    if (enlace.hash === (enVivo ? "#/vivo" : "#/")) enlace.setAttribute("aria-current", m ? "location" : "page");
+    if (enlace.hash === (enVivo ? "#/vivo" : enYouTube ? "#/youtube" : "#/")) enlace.setAttribute("aria-current", m ? "location" : "page");
     else enlace.removeAttribute("aria-current");
   }
   if (enVivo) return vistaVivo(contextoVista());
+  if (enYouTube) return vistaYouTube(contextoVista());
   if (m) vistaEditor(m[1], generacion); else vistaProyectos();
 }
 window.addEventListener("hashchange", navegar);
@@ -138,6 +140,55 @@ async function estadoSistema() {
   el.title = "Datos en " + e.carpeta_datos;
   return e;
 }
+
+function vistaYouTube({ vigente }) {
+  const region = h("select", { "aria-label": "Región de YouTube" },
+    [["CO", "Colombia"], ["MX", "México"], ["AR", "Argentina"], ["ES", "España"], ["US", "Estados Unidos"]]
+      .map(([codigo, pais]) => h("option", { value: codigo }, pais)));
+  const estado = h("p", { class: "tenue", role: "status" });
+  const lista = h("div", { class: "youtube-lista" });
+  const actualizar = h("button", { onclick: cargar }, "Actualizar");
+  vista.append(
+    h("header", { class: "portada portada-vivo" }, h("h1", {}, "Tendencias de YouTube"),
+      h("p", { class: "tenue" }, "Explora videos populares por país y lleva un enlace a Proyectos.")),
+    h("div", { class: "fila youtube-filtros" }, region, actualizar), estado, lista);
+  region.addEventListener("change", cargar);
+
+  let consulta = 0;
+  async function cargar() {
+    const actual = ++consulta;
+    actualizar.disabled = true;
+    estado.textContent = "Cargando videos…";
+    lista.replaceChildren();
+    try {
+      const datos = await api("GET", `/youtube/tendencias?region=${region.value}`);
+      if (!vigente() || actual !== consulta) return;
+      if (!datos.configurado) {
+        estado.textContent = "Para cargar tendencias, configura CLIPSTUDIO_YOUTUBE_API_KEY en el archivo .env y reinicia ClipStudio.";
+        lista.append(h("a", { class: "boton", href: "https://charts.youtube.com/", target: "_blank", rel: "noopener" }, "Abrir YouTube Charts"));
+        return;
+      }
+      estado.textContent = datos.videos.length ? "" : "YouTube no devolvió videos para esta región.";
+      lista.append(...datos.videos.map((video) =>
+        h("article", { class: "panel youtube-video" },
+          h("img", { src: video.miniatura, alt: "", loading: "lazy", referrerPolicy: "no-referrer" }),
+          h("div", { class: "youtube-video-info" }, h("h2", {}, video.titulo), h("p", { class: "tenue" }, video.canal),
+            h("div", { class: "fila" },
+              h("button", { class: "primario", onclick: () => {
+                enlaceTendencia = video.url;
+                location.hash = "#/";
+              } }, "Usar enlace"),
+              h("a", { class: "boton", href: video.url, target: "_blank", rel: "noopener" }, "Ver en YouTube"))))));
+    } catch (error) {
+      if (vigente() && actual === consulta) estado.textContent = error.message;
+    } finally {
+      if (actual === consulta) actualizar.disabled = false;
+    }
+  }
+  cargar();
+}
+
+let enlaceTendencia = "";
 
 // ---------- vista: proyectos ----------
 
@@ -209,7 +260,42 @@ function vistaProyectos() {
 
   // Importar por enlace
   const idiomaUrl = selIdioma();
-  const url = h("input", { type: "url", class: "crece", placeholder: "https://www.youtube.com/watch?v=…", "aria-label": "Enlace del video" });
+  const url = h("input", { type: "url", class: "crece", value: enlaceTendencia, placeholder: "https://www.youtube.com/watch?v=…", "aria-label": "Enlace del video" });
+  enlaceTendencia = "";
+  const audioOriginal = () => h("option", { value: "" }, "Audio predeterminado");
+  const audio = h("select", { "aria-label": "Idioma de audio", hidden: true }, audioOriginal());
+  const estadoAudio = h("span", { class: "tenue pequeno", role: "status" });
+  const nombreIdioma = typeof Intl.DisplayNames === "function"
+    ? new Intl.DisplayNames(["es"], { type: "language", fallback: "code" }) : null;
+  const consultarAudio = h("button", { type: "button", onclick: async () => {
+    const enlace = url.value.trim();
+    if (!enlace || consultarAudio.disabled) return;
+    consultarAudio.disabled = true;
+    estadoAudio.textContent = "Buscando pistas…";
+    audio.hidden = true;
+    audio.replaceChildren(audioOriginal());
+    try {
+      const datos = await api("POST", "/youtube/audio", { url: enlace });
+      if (url.value.trim() !== enlace || !url.isConnected) return;
+      for (const codigo of datos.idiomas) {
+        let nombre = codigo;
+        try { nombre = nombreIdioma?.of(codigo) || codigo; } catch { /* código de la plataforma */ }
+        audio.append(h("option", { value: codigo }, nombre));
+      }
+      audio.hidden = !datos.idiomas.length;
+      estadoAudio.textContent = datos.idiomas.length ? "" : "YouTube no expuso pistas con idioma para este enlace.";
+    } catch (error) {
+      if (url.value.trim() === enlace && url.isConnected) estadoAudio.textContent = error.message;
+    } finally {
+      consultarAudio.disabled = false;
+    }
+  } }, "Buscar pistas de audio");
+  function limpiarAudio() {
+    audio.replaceChildren(audioOriginal());
+    audio.hidden = true;
+    estadoAudio.textContent = "";
+  }
+  url.addEventListener("input", limpiarAudio);
   const botonUrl = h("button", { class: "primario" }, "Importar");
   const formularioUrl = h("form", { class: "fila", onsubmit: async (e) => {
     e.preventDefault();
@@ -217,9 +303,9 @@ function vistaProyectos() {
     const d = duracionClips();
     if (!d) return;
     botonUrl.disabled = true;
-    const p = await intentar(() => api("POST", "/proyectos/url", { url: url.value.trim(), idioma: idiomaUrl.value, ...d }));
+    const p = await intentar(() => api("POST", "/proyectos/url", { url: url.value.trim(), idioma: idiomaUrl.value, audio_idioma: audio.value || null, ...d }));
     botonUrl.disabled = false;
-    if (p) { url.value = ""; avisar("Importación en cola."); refrescar(); }
+    if (p) { url.value = ""; limpiarAudio(); avisar("Importación en cola."); refrescar(); }
   } }, url, botonUrl);
 
   vista.append(
@@ -243,8 +329,9 @@ function vistaProyectos() {
           h("div", { class: "fuente-cabecera" }, h("span", { class: "icono icono-enlace", "aria-hidden": "true" }),
             h("div", {}, h("h3", {}, "Enlace de video"), h("p", { class: "tenue pequeno" }, "YouTube y otras plataformas compatibles con yt-dlp."))),
           h("div", { class: "fuente-enlace" }, formularioUrl,
+            h("div", { class: "fila" }, consultarAudio, audio, estadoAudio),
             h("p", { class: "tenue pequeno" }, "Importa videos propios o que tengas permiso para usar.")),
-          h("div", { class: "fila fuente-opciones" }, h("span", { class: "tenue pequeno" }, "Idioma hablado"), idiomaUrl))),
+          h("div", { class: "fila fuente-opciones" }, h("span", { class: "tenue pequeno" }, "Idioma para transcribir"), idiomaUrl))),
       h("div", { class: "fila ajuste-inicial" }, h("strong", {}, "Duración de los clips sugeridos"), minClip, "a", maxClip, "s")),
     h("div", { class: "cabecera-lista" },
       h("h2", { id: "titulo-proyectos", class: "titulo-lista" }, "Tus proyectos"), conteo),
@@ -1137,6 +1224,13 @@ async function vistaEditor(pid, miGeneracion) {
         bloqueDividido,
         bloqueCredito,
         bloqueStream,
+        recorteVisible ? h("div", { class: "fila campo", role: "group", "aria-label": "Posiciones de encuadre fijo" },
+          ...[[0, "Izquierda"], [.5, "Centro"], [1, "Derecha"]].map(([posicion, texto]) =>
+            h("button", { class: "mini", onclick: () => {
+              guardar({ recorte_x: posicion });
+              ajustarVideo();
+              pintarDerecha();
+            } }, texto))) : null,
         recorteVisible ? rango("Posición horizontal del recorte (0 izquierda – 100 derecha)", "recorte_x", 0, 100, clip,
           (v) => { guardar({ recorte_x: v / 100 }); ajustarVideo(); }) : null,
         recorteVisible ? h("div", { class: "campo" }, h("button", { onclick: async (event) => {

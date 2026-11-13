@@ -416,3 +416,11 @@ button.enlace { background: none; border: 0; padding: 0; color: var(--info); tex
   background: var(--acento-suave);
   border-color: var(--acento);
 }
+
+.youtube-filtros { margin-bottom: 16px; }
+.youtube-lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 16px; }
+.youtube-video { padding: 0; overflow: hidden; }
+.youtube-video img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--fondo); }
+.youtube-video-info { padding: 14px; }
+.youtube-video h2 { overflow-wrap: anywhere; margin-bottom: 4px; }
+.youtube-video-info .fila { margin-top: 12px; }

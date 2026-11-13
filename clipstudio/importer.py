@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import shutil
 import socket
 from pathlib import Path
@@ -93,11 +94,36 @@ def _mensaje(exc: Exception) -> str:
     return f"No se pudo descargar el video: {texto[:300]}"
 
 
+def formato_audio(idioma: str) -> str:
+    if not re.fullmatch(r"[a-zA-Z0-9-]{1,35}", idioma):
+        raise ValueError("Idioma de audio no válido.")
+    return f'bv[height<=1080]+ba[language="{idioma}"]/b[height<=1080][language="{idioma}"]'
+
+
+def idiomas_audio(url: str) -> list[str]:
+    import yt_dlp
+
+    comprobar_destino_publico(url)
+    opciones = {**_opciones(Path(".")), "ignore_no_formats_error": True}
+    opciones.pop("format")
+    try:
+        with yt_dlp.YoutubeDL(opciones) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError as exc:
+        raise ErrorMedia(_mensaje(exc)) from exc
+    return sorted({
+        f["language"] for f in (info.get("formats") or [])
+        if f.get("acodec") not in (None, "none")
+        and re.fullmatch(r"[a-zA-Z0-9-]{1,35}", f.get("language") or "")
+    })
+
+
 def descargar(
     url: str,
     destino: Path,
     cancel: Cancelacion,
     progreso: Callable[[float], None],
+    audio_idioma: str | None = None,
 ) -> tuple[Path, str]:
     """Descarga el video a `destino`. Devuelve (ruta del archivo, titulo)."""
     import yt_dlp
@@ -150,7 +176,10 @@ def descargar(
         if estimado and shutil.disk_usage(destino).free < estimado * 3:
             raise ErrorMedia("No hay espacio suficiente en el disco de datos para descargar y procesar este video.")
         titulo = str(info.get("title") or "Video importado")[:120]
-        with yt_dlp.YoutubeDL(_opciones(destino, hook)) as ydl:
+        opciones = _opciones(destino, hook)
+        if audio_idioma:
+            opciones["format"] = formato_audio(audio_idioma)
+        with yt_dlp.YoutubeDL(opciones) as ydl:
             ydl.extract_info(url, download=True)
     except (Cancelado, ErrorMedia):
         raise
@@ -159,6 +188,8 @@ def descargar(
             raise fallo[-1] from exc
         if cancel.activa:
             raise Cancelado() from exc
+        if audio_idioma and "requested format is not available" in str(exc).lower():
+            raise ErrorMedia(f"La pista de audio {audio_idioma} ya no está disponible. Prueba otra pista.") from exc
         raise ErrorMedia(_mensaje(exc)) from exc
 
     cancel.comprobar()
