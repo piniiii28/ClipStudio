@@ -337,7 +337,23 @@ async function vistaEditor(pid, miGeneracion) {
   const panelDerecho = h("div", {});
   const controles = h("div", { class: "controles" });
   const guardado = h("span", { class: "tenue pequeno", role: "status" });
+  const velocidad = h("select", { "aria-label": "Velocidad de reproducción de la vista previa" },
+    [0.5, 0.75, 1, 1.25, 1.5, 2].map((tasa) =>
+      h("option", { value: tasa, selected: tasa === 1 }, `${String(tasa).replace(".", ",")}×`)));
+  velocidad.addEventListener("change", () => {
+    const tasa = Number(velocidad.value);
+    video.playbackRate = tasa;
+    juego.playbackRate = tasa;
+  });
   const tituloPrevio = h("h2", {}, "Vista previa");
+  const zonaSegura = h("div", { class: "zona-segura", hidden: true, "aria-hidden": "true" });
+  telefono.append(zonaSegura);
+  const mostrarGuia = h("button", { class: "mini", "aria-pressed": "false",
+    title: "Guía orientativa para mantener el texto lejos de los controles de redes sociales",
+    onclick: () => {
+      zonaSegura.hidden = !zonaSegura.hidden;
+      mostrarGuia.setAttribute("aria-pressed", String(!zonaSegura.hidden));
+    } }, "Zona segura");
 
   // --- guardado con retraso ---
   // Los cambios se acumulan POR CLIP y se envian de uno en uno, en orden. Un cambio solo
@@ -841,7 +857,7 @@ async function vistaEditor(pid, miGeneracion) {
       h("div", { class: "fila transporte" },
         h("button", { class: "primario", onclick: reproducir }, "Reproducir / pausar"),
         h("button", { onclick: () => { video.currentTime = clip.inicio; } }, "Ir al inicio"),
-        duracionClip, guardado),
+        velocidad, duracionClip, guardado),
       h("details", { class: "atajos-editor" }, h("summary", {}, "Atajos de teclado"),
         h("p", { class: "tenue pequeno" }, "Espacio: reproducir o pausar · ←/→: mover 1 s · I/O: fijar inicio o fin")),
       h("div", { class: "linea-tiempo" }, h("h3", {}, "Línea de tiempo"), barra),
@@ -1123,11 +1139,18 @@ async function vistaEditor(pid, miGeneracion) {
         bloqueStream,
         recorteVisible ? rango("Posición horizontal del recorte (0 izquierda – 100 derecha)", "recorte_x", 0, 100, clip,
           (v) => { guardar({ recorte_x: v / 100 }); ajustarVideo(); }) : null,
-        recorteVisible ? h("div", { class: "campo" }, h("button", { onclick: async () => {
+        recorteVisible ? h("div", { class: "campo" }, h("button", { onclick: async (event) => {
+          const boton = event.currentTarget;
+          boton.textContent = "Analizando rostro…";
           const r = await operar("encuadre-auto", ["recorte_x", "encuadre", "trayectoria"]);
+          boton.textContent = "Seguir el rostro";
           if (!r) return;
           if (!r.detectado) return avisar("No se detectó un rostro con suficiente continuidad. Ajusta la posición a mano.");
-          ajustarVideo(); pintarDerecha(); avisar("Seguimiento del rostro activado.");
+          if (!vigente()) return;
+          ajustarVideo();
+          pintarDerecha();
+          const cobertura = r.cobertura == null ? "" : ` Rostro detectado en el ${Math.round(r.cobertura * 100)} % de las muestras.`;
+          avisar("Seguimiento del rostro activado." + cobertura);
         } }, "Seguir el rostro"),
         clip.trayectoria?.length ? h("button", { onclick: () => {
           guardar({ seguimiento: false }); ajustarVideo(); pintarDerecha();
@@ -1423,7 +1446,7 @@ async function vistaEditor(pid, miGeneracion) {
             h("div", { class: "fila pequeno" }, "Partes de", parteS, "s", dividir),
             h("label", { class: "fila pequeno", style: "margin:6px 0 0" }, enPausas, "Mover cada corte a la pausa más cercana para no partir frases")))),
       h("section", { class: "centro panel", "aria-label": "Vista previa del clip" },
-        h("div", { class: "monitor-cabecera" }, tituloPrevio, h("span", { class: "etiqueta" }, "9:16")),
+        h("div", { class: "monitor-cabecera" }, tituloPrevio, h("div", { class: "fila" }, mostrarGuia, h("span", { class: "etiqueta" }, "9:16"))),
         h("div", { class: "monitor" }, telefono),
         h("label", { class: "titulo-clip" }, "Título del clip", titulo),
         controles),
