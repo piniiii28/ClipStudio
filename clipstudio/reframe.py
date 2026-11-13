@@ -248,7 +248,12 @@ def detectar_seguimiento(video: Path, inicio: float, fin: float) -> dict | None:
             intervalo = tiempo - ultimo_rostro
             if intervalo > retencion:
                 anterior = None
-            rostro = _elegir_rostro(candidatos, anterior, intervalo)
+            # Mantener también la identidad candidata durante la confirmación:
+            # dos personas de tamaño parecido no deben reiniciar la selección.
+            rostro = _elegir_rostro(candidatos, anterior or por_confirmar, intervalo if anterior else paso)
+            if rostro is None and anterior is None:
+                por_confirmar = None
+                rostro = _elegir_rostro(candidatos, None, intervalo)
             if rostro is not None and anterior is None:
                 # Dos detecciones compatibles evitan arrancar o cambiar de persona
                 # por una cara que aparece un solo fotograma.

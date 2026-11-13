@@ -158,3 +158,23 @@ def test_seguimiento_no_arranca_con_una_deteccion_aislada(monkeypatch):
     assert resultado is not None
     assert resultado["cobertura"] == .88
     assert all(p["centro_x"] < .25 for p in resultado["trayectoria"])
+
+
+def test_confirma_la_misma_persona_aunque_alterne_el_rostro_mayor(monkeypatch):
+    class Captura:
+        def isOpened(self): return True
+        def set(self, *args): pass
+        def read(self): return True, np.zeros((360, 640, 3), dtype=np.uint8)
+        def release(self): pass
+
+    detecciones = iter([
+        [(80, 60, 70 if i % 2 == 0 else 65, 70),
+         (480, 60, 65 if i % 2 == 0 else 70, 70)] for i in range(24)
+    ])
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _: Captura())
+    monkeypatch.setattr(reframe, "_crear_yunet", lambda _: object())
+    monkeypatch.setattr(reframe, "_rostros_yunet", lambda *_: next(detecciones))
+    resultado = reframe.detectar_seguimiento(Path("dos-personas.mp4"), 0, 6)
+    assert resultado is not None
+    assert resultado["cobertura"] > .9
+    assert all(p["centro_x"] < .25 for p in resultado["trayectoria"])
