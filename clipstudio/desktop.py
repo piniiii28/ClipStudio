@@ -11,13 +11,14 @@ import logging
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from urllib.request import Request, ProxyHandler, build_opener
 
-from . import actualizaciones, config
+from . import __version__, actualizaciones, config
 
 log = logging.getLogger("clipstudio.desktop")
 SIN_VENTANA = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -235,12 +236,14 @@ def main() -> int:
                 if motor.proc is not None:
                     threading.Thread(target=vigilar_actualizacion, args=(motor.proc,), daemon=True).start()
                 if not motor.cerrado.is_set():
-                    ventana.load_url(motor.url)
+                    # La version en la direccion obliga a pedir de nuevo la interfaz tras actualizar.
+                    ventana.load_url(f"{motor.url}/?v={__version__}")
             except Exception as exc:
                 log.exception("No se pudo abrir ClipStudio")
                 if not motor.cerrado.is_set():
                     ventana.load_html(_pantalla(str(exc)))
 
+        limpiar_cache_si_cambio_version(config.DATA_DIR / "webview")
         ventana.events.closing += al_cerrar
         ventana.events.closed += motor.cerrado.set
         webview.start(preparar, gui="edgechromium", private_mode=False,
@@ -255,6 +258,34 @@ def main() -> int:
     finally:
         motor.cerrar()
         bloqueo[0].CloseHandle(bloqueo[1])
+
+
+def limpiar_cache_si_cambio_version(carpeta: Path) -> bool:
+    """Borra la cache HTTP de WebView2 cuando cambia la version instalada.
+
+    Sin esto la ventana seguia mostrando la interfaz (HTML, JS, CSS) de la version anterior
+    tras instalar una actualizacion. Solo se borran caches; se conservan el almacenamiento
+    local y las preferencias de la ventana. Devuelve True si borro algo.
+    """
+    marca = carpeta / "version-interfaz.txt"
+    try:
+        if marca.is_file() and marca.read_text(encoding="utf-8").strip() == __version__:
+            return False
+    except OSError:
+        pass
+    borrado = False
+    perfil = carpeta / "EBWebView" / "Default"
+    for nombre in ("Cache", "Code Cache", "Service Worker"):
+        destino = perfil / nombre
+        if destino.is_dir():
+            shutil.rmtree(destino, ignore_errors=True)
+            borrado = True
+    try:
+        carpeta.mkdir(parents=True, exist_ok=True)
+        marca.write_text(__version__, encoding="utf-8")
+    except OSError:
+        log.warning("No se pudo guardar la marca de version de la interfaz", exc_info=True)
+    return borrado
 
 
 def _pantalla(texto: str) -> str:

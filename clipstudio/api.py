@@ -88,6 +88,11 @@ async def proteger_origen(request: Request, call_next):
     respuesta = await call_next(request)
     if request.url.path.startswith("/api/"):
         respuesta.headers["Cache-Control"] = "no-store"
+    elif "Cache-Control" not in respuesta.headers:
+        # Interfaz (HTML, JS, CSS): el navegador puede guardarla, pero debe preguntar si
+        # cambio (ETag) antes de usarla. Sin esto, la ventana de escritorio seguia mostrando
+        # la interfaz de la version anterior tras instalar una actualizacion.
+        respuesta.headers["Cache-Control"] = "no-cache"
     return respuesta
 
 

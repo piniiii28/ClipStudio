@@ -3,6 +3,10 @@
 Actualizado: **2026-11-12**. Este archivo resume la implementación actual. Los informes de
 análisis y las propuestas iniciales se conservan como referencias históricas.
 
+
+> **Norma:** las funciones se dan por verificadas solo cuando se comprueban en la aplicación de
+> escritorio. Las pruebas en navegador son apoyo; ver [AGENTS.md](../AGENTS.md).
+
 ## Situación actual
 
 ClipStudio permite importar videos, crear clips verticales, editar subtítulos y encuadres,

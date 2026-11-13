@@ -64,3 +64,21 @@ def test_apagar_cola_cancela_ejecucion_y_no_deja_hilos(monkeypatch):
     gestor.iniciar()
     assert gestor.encolar("proyecto", "nuevo")
     gestor.detener(timeout=2)
+
+
+def test_limpia_cache_de_webview_solo_al_cambiar_de_version(tmp_path, monkeypatch):
+    from clipstudio import desktop
+
+    perfil = tmp_path / "EBWebView" / "Default"
+    for nombre in ("Cache", "Code Cache", "Local Storage"):
+        (perfil / nombre).mkdir(parents=True)
+        (perfil / nombre / "dato").write_text("x")
+    monkeypatch.setattr(desktop, "__version__", "9.9.9")
+    assert desktop.limpiar_cache_si_cambio_version(tmp_path) is True
+    assert not (perfil / "Cache").exists() and not (perfil / "Code Cache").exists()
+    assert (perfil / "Local Storage" / "dato").exists()  # las preferencias de la ventana se conservan
+    (perfil / "Cache").mkdir()
+    assert desktop.limpiar_cache_si_cambio_version(tmp_path) is False  # misma version: no toca nada
+    assert (perfil / "Cache").exists()
+    monkeypatch.setattr(desktop, "__version__", "9.9.10")
+    assert desktop.limpiar_cache_si_cambio_version(tmp_path) is True

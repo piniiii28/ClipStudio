@@ -4,6 +4,17 @@ Formato: una entrada por versión publicada, con lo añadido, lo corregido y lo 
 que falta. El detalle técnico y las pruebas de cada función están en
 [docs/estado.md](docs/estado.md).
 
+## 0.2.2 — 2026-11-13
+
+### Corregido
+- Tras instalar una versión nueva, la ventana de escritorio seguía mostrando la interfaz de la
+  anterior (caché de WebView2). Ahora la interfaz se revalida siempre y la caché de la ventana
+  se vacía automáticamente al cambiar de versión. Se conservan las preferencias de la ventana.
+
+### Documentación
+- Norma del proyecto: todo cambio debe comprobarse en la aplicación de escritorio, no solo en
+  la versión de navegador ([AGENTS.md](AGENTS.md)).
+
 ## 0.2.1 — 2026-11-13
 
 - Interfaz rediseñada.

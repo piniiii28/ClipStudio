@@ -83,6 +83,9 @@ de la interfaz o con `CLIPSTUDIO_BUSCAR_ACTUALIZACIONES=0`. Detalles y cómo pub
 
 ## Requisitos para desarrollar desde el código
 
+> **Norma del proyecto:** todo cambio se comprueba en la **aplicación de escritorio**, no solo en
+> la versión de navegador. La ventana usa WebView2 y puede comportarse distinto. Ver [AGENTS.md](AGENTS.md).
+
 - Windows 10/11 de 64 bits (probado en Windows 11).
 - [uv](https://docs.astral.sh/uv/) para gestionar Python. uv descarga Python 3.12 por su cuenta.
 - [Node.js](https://nodejs.org/) solo si vas a importar desde YouTube (yt-dlp lo usa para resolver
