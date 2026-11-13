@@ -125,6 +125,28 @@ La imagen es una **instantánea del último segmento cerrado**, actualizada apro
 cada 6 s. No es un reproductor continuo ni otra conexión a la plataforma. Puede tardar en
 aparecer al conectar, hasta que haya un segmento utilizable.
 
+### Calidad del búfer y clips en alta calidad
+- `clipstudio/vivo_calidad.py`: formato de yt-dlp por calidad (`b[height<=N]/bv*[height<=N]+ba/...`),
+  estimaciones GB/h, preferencias (`vivo` en la tabla de preferencias), lectura de listas HLS y
+  alineación por correlación cruzada del audio. Rutas nuevas: `GET/PUT /api/vivo/preferencias`,
+  `GET /api/vivo/calidades?url=`, `GET /api/vivo/{id}/opciones-clip`, `POST /api/vivo/{id}/clip`
+  (`calidad: buffer|alta`, `altura`, `recordar`; `alta` devuelve 202 con `descarga_id`) y
+  `POST /api/vivo/{id}/descargas/{did}/cancelar|usar-bufer`.
+- Alta calidad, hechos comprobados con red real (13/11/2026): YouTube con DVR expone en HLS la última
+  hora con `EXT-X-PROGRAM-DATE-TIME`; Twitch tiene un VOD en curso (`twitch:videos`, `is_live`) con
+  hora por segmento. El video y el audio de YouTube son listas HLS distintas que empiezan en segmentos
+  distintos (5 s), por eso no se usa `download_ranges`/`-ss` sobre la lista remota: se recorta cada lista
+  por hora de reloj y FFmpeg lee solo esos segmentos (sin recodificar). Kick: se usa `kick:videos`, sin
+  probar con un directo real. Un anuncio de Twitch en el búfer impide alinear (se rechaza y se ofrece el búfer).
+- Riesgo conocido: en YouTube el búfer lee video y audio de dos listas y puede arrastrar hasta un segmento
+  (5 s) de desfase entre ambos; el clip en alta calidad sale sincronizado.
+
+### Carpetas (Ajustes)
+- `clipstudio/ajustes.py` guarda `carpetas` en preferencias: exportaciones (copia además de la interna;
+  columnas `copia` y `aviso` en `exportaciones`), búfer en vivo (subcarpeta `ClipStudio-bufer` de la elegida)
+  y fondos. Validación: ruta absoluta, existe o se crea, es carpeta, se puede escribir, no es raíz de disco
+  ni carpeta de la aplicación/Windows. El búfer nuevo se aplica al reconectar.
+
 ### Plataformas y automatización
 
 | Plataforma | Lectura del chat | Evidencia durante la implementación |

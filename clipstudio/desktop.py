@@ -17,11 +17,32 @@ import sys
 import threading
 import time
 from urllib.request import Request, ProxyHandler, build_opener
+from urllib.parse import urlsplit
 
 from . import __version__, actualizaciones, config
 
 log = logging.getLogger("clipstudio.desktop")
 SIN_VENTANA = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+class SelectorCarpeta:
+    """Único método nativo expuesto; solo admite la página principal del motor."""
+
+    def __init__(self, url_motor: str, obtener_ventana):
+        self._origen = urlsplit(url_motor)
+        self._obtener_ventana = obtener_ventana
+
+    def elegir_carpeta(self, titulo=None) -> str | None:
+        import webview
+
+        ventana = self._obtener_ventana()
+        actual = urlsplit(ventana.get_current_url() or "")
+        if (actual.scheme != self._origen.scheme or actual.netloc != self._origen.netloc
+                or actual.path not in ("", "/")):
+            raise PermissionError("El selector solo está disponible en la página local de ClipStudio.")
+        # pywebview no admite título personalizado en create_file_dialog.
+        rutas = ventana.create_file_dialog(webview.FOLDER_DIALOG)
+        return str(rutas[0]) if rutas else None
 
 
 def comando(*argumentos: str) -> list[str]:
@@ -187,7 +208,8 @@ def main() -> int:
 
         webview.settings["ALLOW_DOWNLOADS"] = True
         webview.settings["ALLOW_FILE_URLS"] = False
-        ventana = webview.create_window(titulo, html=_pantalla("Iniciando ClipStudio…"),
+        selector = SelectorCarpeta(motor.url, lambda: ventana)
+        ventana = webview.create_window(titulo, html=_pantalla("Iniciando ClipStudio…"), js_api=selector,
                                         width=1440, height=940, min_size=(1000, 700),
                                         background_color="#0f1115", text_select=True)
         permiso = threading.Event()

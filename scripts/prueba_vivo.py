@@ -152,8 +152,15 @@ def main() -> int:
         comprobar(api("POST", "/vivo", {"url": "prueba:C:/no_existe.mp4"})[0] == 422, "Rechaza un archivo de prueba inexistente (422)")
 
         print("2. Conexion y grabacion")
-        codigo, s = api("POST", "/vivo", {"url": f"prueba:{video}"})
+        comprobar(api("POST", "/vivo", {"url": f"prueba:{video}", "calidad": 360})[0] == 422, "Rechaza una calidad de bufer no valida (422)")
+        comprobar(api("POST", "/vivo", {"url": f"prueba:{video}", "buffer_min": 100})[0] == 422, "Rechaza una duracion de bufer fuera de rango (422)")
+        pref = api("GET", "/vivo/preferencias")[1]
+        comprobar(pref["calidad"] == 720 and pref["buffer_min"] == 20 and pref["clip_modo"] == "preguntar", f"Preferencias por defecto: 720p, 20 min, preguntar ({pref['calidad']}, {pref['buffer_min']})")
+        codigo, s = api("POST", "/vivo", {"url": f"prueba:{video}", "calidad": 480, "buffer_min": 30})
         comprobar(codigo == 201, "POST /api/vivo crea la sesion (201)")
+        comprobar(s["calidad"] == 480 and s["buffer_min"] == 30, "La sesion guarda la calidad y la duracion elegidas")
+        pref = api("GET", "/vivo/preferencias")[1]
+        comprobar(pref["calidad"] == 480 and pref["buffer_min"] == 30, "Las elecciones se recuerdan como preferencia")
         sid = s["id"]
         carpeta = config.VIVO_DIR / sid
         s = esperar(lambda: (lambda x: x if x and x["estado"] == "grabando" else None)(api("GET", "/vivo")[1]), 20)
@@ -193,8 +200,12 @@ def main() -> int:
         comprobar(s is not None, "Hay al menos 40 s de segmentos cerrados")
         codigo, r = api("POST", f"/vivo/{sid}/clip", {"segundos": 45})
         comprobar(codigo == 422, "Rechaza segundos distintos de 30/60/90 (422)")
-        codigo, r = api("POST", f"/vivo/{sid}/clip", {"segundos": 30})
-        comprobar(codigo == 201, f"Clip de los ultimos 30 s creado ({codigo})")
+        codigo, op = api("GET", f"/vivo/{sid}/opciones-clip?segundos=30")
+        comprobar(codigo == 200 and op["buffer"]["disponible"] and op["buffer"]["resolucion"]["alto"] == 360,
+                  f"Opciones del clip: bufer disponible con su resolucion real ({(op or {}).get('buffer')})")
+        comprobar(codigo == 200 and not op["alta"]["disponible"] and op["alta"]["motivo"], "En el modo de pruebas la alta calidad no se ofrece y se explica por que")
+        codigo, r = api("POST", f"/vivo/{sid}/clip", {"segundos": 30, "calidad": "buffer"})
+        comprobar(codigo == 201, f"Clip de los ultimos 30 s creado «del bufer» ({codigo})")
         if codigo == 201:
             proyectos.append(r["proyecto_id"])
             _, p = api("GET", f"/proyectos/{r['proyecto_id']}")
@@ -237,6 +248,17 @@ def main() -> int:
         comprobar(not carpeta.exists(), "Se borro la carpeta del bufer")
         comprobar(api("GET", "/vivo")[1] is None, "Sin sesion activa tras parar")
         comprobar(api("POST", f"/vivo/{sid}/parar")[0] == 404, "Parar de nuevo da 404")
+
+        print("7. El bufer respeta la duracion elegida")
+        codigo, s2 = api("POST", "/vivo", {"url": f"prueba:{video}", "buffer_min": 0.25, "calidad": 720})
+        comprobar(codigo == 201 and s2["buffer_min"] == 0.25, "Sesion con un bufer de 15 s (solo en el modo de pruebas)")
+        s2 = esperar(lambda: (lambda x: x if x and x["buffer_inicio_s"] > 0 else None)(api("GET", "/vivo")[1]), 70)
+        comprobar(s2 is not None, "Se empiezan a borrar los segmentos mas antiguos")
+        if s2:
+            ventana = s2["cobertura_s"] - s2["buffer_inicio_s"]
+            comprobar(ventana <= 15 + 2 * 6 + 1, f"El bufer conserva ~15 s ({ventana:.0f} s con el margen de un segmento)")
+            comprobar(s2["calidad"] == 720 and s2["resolucion"]["alto"] == 360, "Se informa la calidad pedida y la resolucion real")
+        api("POST", f"/vivo/{s2['id'] if s2 else sid}/parar")
     finally:
         servidor.terminate()
         try:

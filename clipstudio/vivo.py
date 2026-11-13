@@ -4,7 +4,9 @@ Piezas:
   - resolver_directo(): yt-dlp -> URL del flujo (o el modo de pruebas `prueba:<archivo>`).
   - Un unico subproceso FFmpeg por sesion con dos salidas: segmentos MPEG-TS sin recodificar
     y audio PCM por stdout (para medir el volumen por segundo).
-  - Bufer circular: solo se conservan los ultimos CLIPSTUDIO_VIVO_BUFER_MIN minutos.
+  - Bufer circular: solo se conservan los ultimos N minutos (10, 20, 30 o 60, a elegir al conectar).
+  - Calidad del bufer a elegir (480p, 720p o 1080p) y clips en alta calidad pedidos a la plataforma
+    (ver vivo_calidad.py).
   - Detector causal de momentos (funciones puras, probables sin FFmpeg).
   - Recorte de un tramo a un MP4 y alta de un proyecto normal en la cola de siempre.
   - APIRouter con las rutas /api/vivo.
@@ -22,16 +24,18 @@ import statistics
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from . import chat, config, db, importer, media, pipeline, reframe
-from .media import Cancelacion, ErrorMedia
+from . import ajustes, chat, config, db, importer, media, pipeline, reframe, vivo_calidad
+from .media import Cancelacion, Cancelado, ErrorMedia
 
 log = logging.getLogger("clipstudio")
 
@@ -50,6 +54,7 @@ MIN_CLIP_S = 3.0
 ESPERA_POSTERIOR_S = 25.0      # cuanto se espera a que lleguen los segmentos posteriores al pico
 MIN_LIBRE_BYTES = 2 * 1024**3
 PREFIJO_PRUEBA = "prueba:"
+ACTIVAS = ("esperando", "descargando", "alineando", "recortando")   # estados de una descarga en curso
 
 
 # ---------- modo de pruebas ----------
@@ -75,8 +80,11 @@ def archivo_de_prueba(url: str) -> Path | None:
 
 # ---------- resolver el directo ----------
 
-def resolver_directo(url: str) -> dict:
-    """Devuelve {"entrada", "cabeceras", "titulo", "prueba"} para que FFmpeg lea el directo."""
+def resolver_directo(url: str, altura: int = vivo_calidad.CALIDAD_DEFECTO) -> dict:
+    """Devuelve {"entrada", "cabeceras", "titulo", "prueba"} para que FFmpeg lea el directo.
+
+    `altura` es la calidad del bufer (480, 720 o 1080): el formato pedido a yt-dlp.
+    """
     prueba = archivo_de_prueba(url)
     if prueba is not None:
         return {"entrada": str(prueba), "entrada_audio": None, "cabeceras": {}, "titulo": prueba.stem[:120], "prueba": True}
@@ -91,8 +99,8 @@ def resolver_directo(url: str) -> dict:
 
     opciones: dict = {
         # Un solo flujo con video y audio si existe (Kick, Twitch); si no, video y audio
-        # por separado (YouTube los entrega asi), hasta 1080p.
-        "format": "b[height<=1080]/bv*[height<=1080]+ba/b/best",
+        # por separado (YouTube los entrega asi), hasta la altura elegida.
+        "format": vivo_calidad.formato_ytdlp(altura),
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
@@ -182,6 +190,7 @@ class Seg:
     inicio: float      # segundos desde el inicio de la grabacion
     fin: float
     bytes: int = 0
+    reloj: float = 0.0   # hora de reloj (epoch) en que se vio cerrado el segmento; 0 si se desconoce
 
 
 def segmentos_que_cubren(segmentos: list[Seg], a: float, b: float) -> list[Seg]:
@@ -230,7 +239,7 @@ def leer_lista_csv(texto: str) -> list[Seg]:
 # ---------- sesion ----------
 
 def _ruta_sesion(sid: str) -> Path:
-    return config.VIVO_DIR / sid
+    return ajustes.carpeta_vivo() / sid
 
 
 def _borrar_carpeta(carpeta: Path) -> None:
@@ -253,9 +262,18 @@ def _guardar(tabla: str, id_: str, **campos) -> None:
 class Sesion:
     def __init__(self, id_: str, url: str, usar_chat: bool = True,
                  automaticos: bool = True, desfase_chat_s: float = 3.0,
-                 composicion: dict | None = None) -> None:
+                 composicion: dict | None = None, calidad: int = vivo_calidad.CALIDAD_DEFECTO,
+                 buffer_min: float | None = None) -> None:
         self.id = id_
         self.url = url
+        self.calidad = calidad
+        self.buffer_min = float(buffer_min if buffer_min is not None else config.VIVO_BUFER_MIN)
+        self.resolucion: dict | None = None       # resolucion real del bufer (ancho, alto)
+        self.descargas: list[dict] = []           # clips en alta calidad en curso o recien terminados
+        self._cancelaciones: dict[str, Cancelacion] = {}
+        self._sondeo: tuple[float, dict] | None = None
+        self._lock_sondeo = threading.Lock()
+        self.pad_alta_s = vivo_calidad.PAD_ALTA_S
         self.titulo = ""
         self.estado = "conectando"        # conectando | grabando | detenido | error
         self.error: str | None = None
@@ -305,7 +323,7 @@ class Sesion:
 
     def _arrancar(self) -> None:
         try:
-            datos = resolver_directo(self.url)
+            datos = resolver_directo(self.url, self.calidad)
             if self.parar.is_set():
                 return
             self.titulo = datos["titulo"]
@@ -390,6 +408,8 @@ class Sesion:
             self._lector_chat.cerrar()
         self._cancel_clip.cancelar()
         self._cancel_vista.cancelar()
+        for cancelacion in list(self._cancelaciones.values()):
+            cancelacion.cancelar()
         self._matar()
         for hilo in self._hilos:
             if hilo is not threading.current_thread():
@@ -657,6 +677,7 @@ class Sesion:
             return
         completo = datos[: fin + 1]
         nuevos = leer_lista_csv(completo.decode("utf-8", "replace"))
+        visto = time.time()
         with self.lock:
             self._pos_lista += len(completo)
             for s in nuevos:
@@ -664,15 +685,26 @@ class Sesion:
                     self._offset = s.inicio
                 s.inicio -= self._offset
                 s.fin -= self._offset
+                s.reloj = visto
                 try:
                     s.bytes = (self.carpeta / s.nombre).stat().st_size
                 except OSError:
                     s.bytes = 0
                 self.segmentos.append(s)
+        if nuevos and self.resolucion is None:
+            self._sondear_resolucion(nuevos[0])
+
+    def _sondear_resolucion(self, seg: Seg) -> None:
+        """Resolucion real de lo grabado (la que tendra el clip «del bufer»)."""
+        try:
+            info = media.sondear(self.carpeta / seg.nombre)
+            self.resolucion = {"ancho": info["ancho"], "alto": info["alto"]}
+        except Exception:
+            log.debug("No se pudo leer la resolucion del bufer", exc_info=True)
 
     def _recortar_bufer(self) -> None:
         with self.lock:
-            sobran = segmentos_a_borrar(self.segmentos, config.VIVO_BUFER_MIN * 60)
+            sobran = segmentos_a_borrar(self.segmentos, self.buffer_min * 60)
         if not sobran:
             return
         borrados = set()
@@ -701,7 +733,7 @@ class Sesion:
             if segundos >= 10 and self.segmentos:
                 dur = max(s.fin for s in self.segmentos) - min(s.inicio for s in self.segmentos)
                 if dur > 0:
-                    estimado = round(tamano / dur * config.VIVO_BUFER_MIN * 60 / 1024**3, 2)
+                    estimado = round(tamano / dur * self.buffer_min * 60 / 1024**3, 2)
             return {
                 "id": self.id,
                 "titulo": self.titulo,
@@ -711,7 +743,10 @@ class Sesion:
                 "cobertura_s": round(max((s.fin for s in self.segmentos), default=0.0), 1),
                 "n_segmentos": len(self.segmentos),
                 "tamano_mb": round(tamano / 1024**2, 1),
-                "buffer_min": config.VIVO_BUFER_MIN,
+                "buffer_min": self.buffer_min,
+                "calidad": self.calidad,
+                "resolucion": dict(self.resolucion) if self.resolucion else None,
+                "descargas": [self._descarga_publica(d) for d in self.descargas],
                 "estimado_buffer_gb": estimado,
                 "volumen": self.db[-VOLUMEN_MOSTRADO_S:],
                 "buffer_inicio_s": min((s.inicio for s in self.segmentos), default=0.0),
@@ -788,6 +823,218 @@ class Sesion:
         return proyecto
 
 
+    # -- clips en alta calidad (tramo pedido a la plataforma) --
+
+    def tramo_de_momento(self, mid: str) -> tuple[dict, float, float]:
+        with self.lock:
+            momento = next((m for m in self.momentos if m["id"] == mid), None)
+            if momento is None:
+                raise ErrorMedia("Ese momento no existe.")
+            if momento["tiempo"] < min((seg.inicio for seg in self.segmentos), default=0.0):
+                raise ErrorMedia("Ese momento ya está fuera del búfer.")
+            return dict(momento), max(0.0, momento["tiempo"] - ANTES_S), momento["tiempo"] + DESPUES_S
+
+    def sondear_alta(self) -> dict:
+        """Consulta (con una pequeña cache) si la plataforma permite pedir tramos del pasado."""
+        with self._lock_sondeo:
+            ahora = time.monotonic()
+            if self._sondeo is None or ahora - self._sondeo[0] > 20:
+                self._sondeo = (ahora, vivo_calidad.sondear_plataforma(self.url))
+            res = dict(self._sondeo[1])
+            if res.get("ok"):
+                # La ventana de la plataforma sigue creciendo mientras dura el directo.
+                res["duracion"] = res["duracion"] + (ahora - self._sondeo[0])
+            return res
+
+    def opciones_clip(self, a: float, b: float) -> dict:
+        """Opciones de calidad para el tramo [a, b] del bufer (para el dialogo de la interfaz)."""
+        with self.lock:
+            segmentos = list(self.segmentos)
+        plan_recorte(segmentos, a, b)   # lanza ErrorMedia si el tramo ya no esta en el bufer
+        if archivo_de_prueba(self.url) is not None:
+            sondeo = {"ok": False, "plataforma": "prueba", "motivo": "El modo de pruebas no tiene plataforma."}
+        else:
+            sondeo = self.sondear_alta()
+        tramo = None
+        if sondeo.get("ok"):
+            a_reloj, b_reloj = vivo_calidad.reloj_de(segmentos, a), vivo_calidad.reloj_de(segmentos, b)
+            if a_reloj is None or b_reloj is None:
+                sondeo = {**sondeo, "ok": False, "motivo": "Todavía no hay hora de reloj del búfer; espera unos segundos."}
+            else:
+                tramo = vivo_calidad.calcular_tramo(sondeo, a_reloj, b_reloj, sondeo["plataforma"], pad=self.pad_alta_s)
+        opciones = vivo_calidad.decidir_opciones((self.resolucion or {}).get("alto"), sondeo, tramo)
+        opciones["buffer"]["resolucion"] = dict(self.resolucion) if self.resolucion else None
+        opciones["plataforma"] = sondeo.get("plataforma")
+        opciones["duracion_s"] = round(max(0.0, b - a), 1)
+        return opciones
+
+    def _descarga_publica(self, d: dict) -> dict:
+        fin = d.get("fin") or time.monotonic()
+        base = {k: v for k, v in d.items() if not k.startswith("_") and k not in ("inicio", "fin", "a", "b")}
+        base["segundos"] = round(fin - d["inicio"])
+        base["activa"] = d["estado"] in ACTIVAS
+        return base
+
+    def _estado_descarga(self, d: dict, **campos) -> None:
+        with self.lock:
+            d.update(campos)
+
+    def iniciar_clip_alta(self, a: float, b: float, nombre: str, altura: int, mid: str | None = None) -> dict:
+        """Empieza en segundo plano un clip en alta calidad. Devuelve la ficha de la descarga."""
+        with self.lock:
+            if sum(1 for x in self.descargas if x["estado"] in ACTIVAS) >= 2:
+                raise ErrorMedia("Ya hay dos descargas en alta calidad en curso. Espera a que terminen o cancélalas.")
+            if mid is not None and any(x.get("momento_id") == mid and x["estado"] in ACTIVAS for x in self.descargas):
+                raise ErrorMedia("Ese momento ya se está descargando en alta calidad.")
+            ficha = {"id": uuid.uuid4().hex[:12], "momento_id": mid, "nombre": nombre, "altura": int(altura),
+                     "estado": "esperando", "progreso": 0.0, "error": None, "proyecto_id": None,
+                     "a": a, "b": b, "inicio": time.monotonic(), "fin": None}
+            self.descargas.append(ficha)
+            for vieja in [x for x in self.descargas if x["estado"] not in ACTIVAS][:-5]:
+                self.descargas.remove(vieja)
+            cancelacion = self._cancelaciones[ficha["id"]] = Cancelacion()
+        if mid is not None:
+            self._estado_momento(mid, estado="creando", error=None)
+        threading.Thread(target=self._trabajo_alta, args=(ficha, cancelacion), daemon=True,
+                         name=f"vivo-alta-{ficha['id'][:6]}").start()
+        return self._descarga_publica(ficha)
+
+    def cancelar_descarga(self, did: str) -> bool:
+        """Cancela una descarga en curso o descarta una terminada. False si no existe."""
+        with self.lock:
+            ficha = next((x for x in self.descargas if x["id"] == did), None)
+            if ficha is None:
+                return False
+            activa = ficha["estado"] in ACTIVAS
+            if not activa:
+                self.descargas.remove(ficha)
+        if activa:
+            self._cancelaciones[did].cancelar()
+        return True
+
+    def usar_bufer_de(self, did: str) -> dict:
+        """Tras fallar una descarga en alta calidad: crea ese mismo clip desde el bufer."""
+        with self.lock:
+            ficha = next((x for x in self.descargas if x["id"] == did), None)
+            if ficha is None:
+                raise ErrorMedia("Esa descarga ya no existe.")
+            if ficha["estado"] in ACTIVAS:
+                raise ErrorMedia("Esa descarga sigue en curso.")
+        proyecto = self.crear_clip(ficha["a"], ficha["b"], ficha["nombre"])
+        if ficha.get("momento_id"):
+            self._estado_momento(ficha["momento_id"], estado="convertido", proyecto_id=proyecto["id"], error=None)
+        with self.lock:
+            if ficha in self.descargas:
+                self.descargas.remove(ficha)
+        return proyecto
+
+    def _trabajo_alta(self, ficha: dict, cancel: Cancelacion) -> None:
+        mid = ficha["momento_id"]
+        try:
+            self.esperar_cobertura(ficha["b"], ESPERA_POSTERIOR_S)
+            if self.parar.is_set():
+                raise ErrorMedia("Se detuvo la grabación antes de crear el clip.")
+            proyecto = self._crear_clip_alta(ficha, cancel)
+        except Cancelado:
+            self._estado_descarga(ficha, estado="cancelado", error="Descarga cancelada.", fin=time.monotonic())
+            if mid:
+                self._estado_momento(mid, estado="nuevo", error=None)
+            return
+        except Exception as exc:
+            mensaje = str(exc) if isinstance(exc, ErrorMedia) else "No se pudo crear el clip en alta calidad."
+            if not isinstance(exc, ErrorMedia):
+                log.warning("Fallo el clip en alta calidad", exc_info=True)
+            self._estado_descarga(ficha, estado="error", error=mensaje, fin=time.monotonic())
+            if mid:
+                self._estado_momento(mid, estado="nuevo", error=mensaje)
+            return
+        self._estado_descarga(ficha, estado="listo", progreso=1.0, proyecto_id=proyecto["id"], fin=time.monotonic())
+        if mid:
+            self._estado_momento(mid, estado="convertido", proyecto_id=proyecto["id"], error=None)
+
+    def _audio_del_bufer(self, a: float, b: float):
+        """Audio del tramo del bufer (para alinear), los segmentos y el tramo real [a, b] que cubre."""
+        with self.lock_archivos:
+            with self.lock:
+                segmentos = list(self.segmentos)
+            cubiertos, desfase, duracion = plan_recorte(segmentos, a, b)
+            lista = self.carpeta / f"audio_{uuid.uuid4().hex[:8]}.txt"
+            lineas = []
+            for s in cubiertos:
+                ruta = (self.carpeta / s.nombre).resolve().as_posix().replace("'", "'\\''")
+                lineas.append(f"file '{ruta}'")
+            lista.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+            try:
+                audio = vivo_calidad.leer_audio_pcm(lista, ss=desfase, t=duracion,
+                                                    entrada_extra=["-f", "concat", "-safe", "0"])
+            finally:
+                lista.unlink(missing_ok=True)
+        inicio = cubiertos[0].inicio + desfase
+        return audio, segmentos, inicio, inicio + duracion
+
+    def _crear_clip_alta(self, ficha: dict, cancel: Cancelacion) -> dict:
+        """Pide a la plataforma SOLO el tramo, lo alinea con el bufer por el audio y crea el proyecto."""
+        if not config.find_tool("ffmpeg"):
+            raise ErrorMedia("FFmpeg no está instalado. Ejecuta: uv run python scripts/instalar_ffmpeg.py")
+        if shutil.disk_usage(config.DATA_DIR).free < MIN_LIBRE_BYTES:
+            raise ErrorMedia("Queda menos de 2 GB libres en el disco de datos. Libera espacio e inténtalo de nuevo.")
+        sondeo = self.sondear_alta()
+        if not sondeo.get("ok"):
+            raise ErrorMedia(sondeo.get("motivo") or "La plataforma no permite pedir ese tramo.")
+        referencia, segmentos, a, b = self._audio_del_bufer(ficha["a"], ficha["b"])
+        duracion = b - a
+        a_reloj, b_reloj = vivo_calidad.reloj_de(segmentos, a), vivo_calidad.reloj_de(segmentos, b)
+        if a_reloj is None or b_reloj is None:
+            raise ErrorMedia("No se pudo calcular la hora del tramo en el búfer.")
+        tramo = vivo_calidad.calcular_tramo(sondeo, a_reloj, b_reloj, sondeo["plataforma"], pad=self.pad_alta_s)
+        if not tramo["ok"]:
+            raise ErrorMedia(tramo["motivo"])
+        pid = db.nuevo_id()
+        carpeta = pipeline.carpeta_proyecto(pid)
+        carpeta.mkdir(parents=True)
+        with self.lock:
+            composicion = reframe.normalizar_composicion(self.composicion)
+        try:
+            self._estado_descarga(ficha, estado="descargando", progreso=0.02)
+            bajado, inicio_archivo = vivo_calidad.descargar_tramo_hls(
+                sondeo["url"], ficha["altura"], tramo["t0"], tramo["t1"], carpeta / "alta.tmp", cancel,
+                lambda f: self._estado_descarga(ficha, progreso=round(0.02 + 0.78 * f, 3)), sondeo.get("inicio"))
+            cancel.comprobar()
+            self._estado_descarga(ficha, estado="alineando", progreso=0.82)
+            largo = vivo_calidad.leer_audio_pcm(bajado)
+            pos, score, segundo = vivo_calidad.desplazamiento_audio(referencia, largo)
+            log.info("Alineado en alta calidad: pos=%.2f s (por reloj se esperaba %.2f) score=%.2f segundo=%.2f",
+                     pos, tramo["a_emision"] - inicio_archivo, score, segundo)
+            if not vivo_calidad.alineado_fiable(score, segundo):
+                raise ErrorMedia("No se pudo alinear el tramo de la plataforma con tu búfer (¿hay un anuncio o silencio?). "
+                                 "Puedes usar el búfer.")
+            if pos + duracion > len(largo) / vivo_calidad.AUDIO_HZ + 0.5:
+                raise ErrorMedia("El tramo descargado quedó más corto de lo esperado. Puedes usar el búfer.")
+            corte = pos + vivo_calidad.desfase_audio(bajado)
+            self._estado_descarga(ficha, estado="recortando", progreso=0.86)
+            temporal = carpeta / "fuente.subiendo"
+            media.ejecutar_ffmpeg(
+                ["-i", str(bajado), "-ss", f"{corte:.3f}", "-t", f"{duracion:.3f}",
+                 "-map", "0:v:0", "-map", "0:a:0?",
+                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p",
+                 "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-f", "mp4", str(temporal)],
+                duracion, cancel, lambda f: self._estado_descarga(ficha, progreso=round(0.86 + 0.13 * f, 3)))
+            temporal.replace(carpeta / "fuente.mp4")
+            shutil.rmtree(carpeta / "alta.tmp", ignore_errors=True)
+            proyecto = db.insertar(
+                "proyectos",
+                {"id": pid, "nombre": ficha["nombre"][:120], "origen": "archivo", "archivo_fuente": "fuente.mp4",
+                 "idioma": "auto", "estado": "en_cola", "paso": "en_cola", "mensaje": "En cola...",
+                 "progreso": 0, "min_s": 15.0, "max_s": 60.0, "es_clip_vivo": 1,
+                 "encuadre_vivo": composicion},
+            )
+        except BaseException:
+            shutil.rmtree(carpeta, ignore_errors=True)
+            raise
+        pipeline.gestor.encolar("proyecto", pid)
+        return proyecto
+
+
 # ---------- estado global ----------
 
 _sesion: Sesion | None = None
@@ -798,8 +1045,22 @@ def _activa(s: Sesion | None) -> bool:
     return s is not None and s.estado in ("conectando", "grabando")
 
 
+def _validar_calidad_y_duracion(calidad: int | None, buffer_min: float | None) -> tuple[int, float]:
+    """Calidad (480/720/1080) y minutos del bufer: lo pedido, o la preferencia guardada, o el valor por defecto."""
+    prefs = vivo_calidad.leer_preferencias()
+    calidad = prefs["calidad"] if calidad is None else calidad
+    buffer_min = prefs["buffer_min"] if buffer_min is None else float(buffer_min)
+    if calidad not in vivo_calidad.ALTURAS_BUFER:
+        raise HTTPException(422, "Elige 480p, 720p o 1080p para la calidad del búfer.")
+    en_pruebas = modo_pruebas() and 0.25 <= buffer_min <= 60
+    if buffer_min not in vivo_calidad.opciones_buffer_min() and not en_pruebas:
+        raise HTTPException(422, "Elige 10, 20, 30 o 60 minutos para la duración del búfer.")
+    return int(calidad), float(buffer_min)
+
+
 def iniciar_sesion(url: str, usar_chat: bool = True, automaticos: bool = True,
-                   desfase_chat_s: float = 3.0, composicion: dict | None = None) -> Sesion:
+                   desfase_chat_s: float = 3.0, composicion: dict | None = None,
+                   calidad: int | None = None, buffer_min: float | None = None) -> Sesion:
     """Crea una sesion y empieza a conectar. Lanza HTTPException si ya hay una activa."""
     global _sesion
     url = (url or "").strip()
@@ -818,20 +1079,31 @@ def iniciar_sesion(url: str, usar_chat: bool = True, automaticos: bool = True,
         raise HTTPException(422, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    calidad, buffer_min = _validar_calidad_y_duracion(calidad, buffer_min)
     if not config.find_tool("ffmpeg"):
         raise HTTPException(503, "FFmpeg no esta instalado. Ejecuta: uv run python scripts/instalar_ffmpeg.py")
-    config.VIVO_DIR.mkdir(parents=True, exist_ok=True)
-    if shutil.disk_usage(config.VIVO_DIR).free < MIN_LIBRE_BYTES:
-        raise HTTPException(507, "Queda menos de 2 GB libres en el disco de datos. Libera espacio para grabar.")
+    carpeta_bufer = ajustes.carpeta_vivo()
+    try:
+        carpeta_bufer.mkdir(parents=True, exist_ok=True)
+        libre = shutil.disk_usage(carpeta_bufer).free
+    except OSError as exc:
+        raise HTTPException(409, f"No se puede usar la carpeta del búfer ({carpeta_bufer}): {exc.strerror or exc}. "
+                                 "Elige otra en Ajustes o restablécela.") from exc
+    if libre < MIN_LIBRE_BYTES:
+        raise HTTPException(507, "Queda menos de 2 GB libres en el disco del búfer. Libera espacio o elige otra carpeta en Ajustes.")
     with _candado:
         if _activa(_sesion):
             raise HTTPException(409, "Ya hay una grabación en vivo en curso. Páralo antes de conectar otro directo.")
         anterior = _sesion
         fila = db.insertar("sesiones_vivo", {"url": url, "estado": "conectando"})
-        _sesion = Sesion(fila["id"], url, usar_chat, automaticos, desfase_chat_s, composicion)
+        _sesion = Sesion(fila["id"], url, usar_chat, automaticos, desfase_chat_s, composicion, calidad, buffer_min)
     if anterior is not None:
         anterior.detener()
     _sesion.iniciar()
+    try:
+        vivo_calidad.guardar_preferencias({"calidad": calidad, "buffer_min": buffer_min})   # se recuerdan para la próxima vez
+    except Exception:
+        log.warning("No se pudieron guardar las preferencias del búfer", exc_info=True)
     return _sesion
 
 
@@ -859,10 +1131,13 @@ def recuperar() -> None:
     except Exception:
         log.error("No se pudieron marcar las sesiones en vivo interrumpidas", exc_info=True)
     activas = {_sesion.id} if _sesion else set()
-    if config.VIVO_DIR.is_dir():
-        for carpeta in config.VIVO_DIR.iterdir():
-            if carpeta.is_dir() and carpeta.name not in activas:
-                _borrar_carpeta(carpeta)
+    # El bufer predeterminado y el de la carpeta elegida en Ajustes (esta ultima es siempre una
+    # subcarpeta propia de ClipStudio, asi que nunca se borra nada ajeno).
+    for base in {config.VIVO_DIR, ajustes.carpeta_vivo()}:
+        if base.is_dir():
+            for carpeta in base.iterdir():
+                if carpeta.is_dir() and carpeta.name not in activas:
+                    _borrar_carpeta(carpeta)
 
 
 def detener_todo() -> None:
@@ -884,11 +1159,16 @@ class SesionNueva(BaseModel):
     automaticos: bool = True
     desfase_chat_s: float = Field(3, ge=0, le=30, allow_inf_nan=False)
     composicion: dict | None = None
+    calidad: int | None = None                                   # 480 | 720 | 1080 (vacío = preferencia guardada)
+    buffer_min: float | None = Field(None, allow_inf_nan=False)  # 10 | 20 | 30 | 60 (vacío = preferencia guardada)
 
 
 class ClipVivo(BaseModel):
     segundos: int | None = None
     momento_id: str | None = Field(None, max_length=64)
+    calidad: Literal["buffer", "alta"] = "buffer"     # «del búfer» (inmediato) o «alta calidad desde la plataforma»
+    altura: int | None = Field(None, ge=144, le=2160)  # resolución pedida si calidad == "alta"
+    recordar: bool = False                            # «Usar siempre esta opción»
 
 
 def _mmss(t: float) -> str:
@@ -897,7 +1177,60 @@ def _mmss(t: float) -> str:
 
 @router.post("", status_code=201)
 def crear_sesion(datos: SesionNueva) -> dict:
-    return iniciar_sesion(datos.url, datos.usar_chat, datos.automaticos, datos.desfase_chat_s, datos.composicion).publico()
+    return iniciar_sesion(datos.url, datos.usar_chat, datos.automaticos, datos.desfase_chat_s, datos.composicion,
+                          datos.calidad, datos.buffer_min).publico()
+
+
+class PreferenciasVivo(BaseModel):
+    calidad: int | None = None
+    buffer_min: float | None = Field(None, allow_inf_nan=False)
+    clip_modo: Literal["preguntar", "buffer", "alta"] | None = None
+    clip_altura: int | None = Field(None, ge=144, le=2160)
+
+
+def _opciones_preferencias() -> dict:
+    return {
+        "calidades": list(vivo_calidad.ALTURAS_BUFER),
+        "buffer_min": vivo_calidad.opciones_buffer_min(),
+        "estimacion": vivo_calidad.estimar_calidades(None),
+    }
+
+
+@router.get("/preferencias")
+def ver_preferencias() -> dict:
+    return {**vivo_calidad.leer_preferencias(), "opciones": _opciones_preferencias()}
+
+
+@router.put("/preferencias")
+def guardar_preferencias(datos: PreferenciasVivo) -> dict:
+    cambios = datos.model_dump(exclude_unset=True)
+    if "calidad" in cambios and cambios["calidad"] not in vivo_calidad.ALTURAS_BUFER:
+        raise HTTPException(422, "Elige 480p, 720p o 1080p.")
+    if "buffer_min" in cambios and float(cambios["buffer_min"]) not in vivo_calidad.opciones_buffer_min():
+        raise HTTPException(422, "Elige 10, 20, 30 o 60 minutos.")
+    if cambios.get("clip_modo") != "alta" and "clip_modo" in cambios:
+        cambios.setdefault("clip_altura", None)
+    actuales = vivo_calidad.leer_preferencias()
+    nuevas = {**actuales, **cambios}
+    db.guardar_preferencia("vivo", vivo_calidad.normalizar_preferencias(nuevas))
+    return {**vivo_calidad.leer_preferencias(), "opciones": _opciones_preferencias()}
+
+
+@router.get("/calidades")
+def consultar_calidades(url: str) -> dict:
+    """Consumo por hora de cada calidad del bufer para ese directo (sin conectar ni grabar)."""
+    if archivo_de_prueba(url) is not None:
+        return {"estimacion": vivo_calidad.estimar_calidades(None), "medido": False, "titulo": None}
+    try:
+        url = importer.validar_url(url)
+        importer.comprobar_destino_publico(url)
+        info = vivo_calidad._extraer(url)
+    except (ValueError, ErrorMedia) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(422, importer._mensaje(exc)) from exc
+    estimacion = vivo_calidad.estimar_calidades(info.get("formats"))
+    return {"estimacion": estimacion, "medido": any(e["medido"] for e in estimacion), "titulo": info.get("title")}
 
 
 @router.get("")
@@ -952,30 +1285,77 @@ def marcar_momento(sid: str, datos: MarcadorVivo) -> dict:
         raise HTTPException(409, str(exc)) from exc
 
 
-@router.post("/{sid}/clip", status_code=201)
-def crear_clip(sid: str, datos: ClipVivo) -> dict:
-    s = _sesion_por_id(sid)
-    if (datos.segundos is None) == (datos.momento_id is None):
+def _tramo_pedido(s: Sesion, segundos: int | None, momento_id: str | None) -> tuple[float, float, str, str | None]:
+    """(a, b, nombre, momento_id) del tramo que se pide: los ultimos N s o el entorno de un momento."""
+    if (segundos is None) == (momento_id is None):
         raise HTTPException(422, "Indica los segundos o el momento, pero no los dos.")
     titulo = (s.titulo or "Directo")[:80]
+    if momento_id is not None:
+        with s.lock:
+            momento = next((m for m in s.momentos if m["id"] == momento_id), None)
+        if momento is None:
+            raise HTTPException(404, "Ese momento no existe.")
+        if momento.get("proyecto_id"):
+            raise HTTPException(409, "Ese momento ya tiene su clip.")
+        _, a, b = s.tramo_de_momento(momento_id)
+        return a, b, f"{titulo} – momento {_mmss(momento['tiempo'])}", momento_id
+    if segundos not in ULTIMOS_S:
+        raise HTTPException(422, "Elige 30, 60 o 90 segundos.")
+    b = s.cobertura()
+    return max(0.0, b - segundos), b, f"{titulo} – últimos {segundos} s", None
+
+
+@router.get("/{sid}/opciones-clip")
+def opciones_clip(sid: str, segundos: int | None = None, momento_id: str | None = None) -> dict:
+    """Opciones de calidad disponibles para un tramo (consulta a la plataforma, sin descargar)."""
+    s = _sesion_por_id(sid)
     try:
+        a, b, _, _ = _tramo_pedido(s, segundos, momento_id)
+        return {**s.opciones_clip(a, b), "preferencias": vivo_calidad.leer_preferencias()}
+    except ErrorMedia as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/{sid}/clip", status_code=201)
+def crear_clip(sid: str, datos: ClipVivo, respuesta: Response) -> dict:
+    s = _sesion_por_id(sid)
+    if datos.recordar:
+        vivo_calidad.guardar_preferencias({"clip_modo": datos.calidad, "clip_altura": datos.altura if datos.calidad == "alta" else None})
+    try:
+        if datos.calidad == "alta":
+            if not datos.altura:
+                raise HTTPException(422, "Indica la resolución en alta calidad.")
+            a, b, nombre, mid = _tramo_pedido(s, datos.segundos, datos.momento_id)
+            ficha = s.iniciar_clip_alta(a, b, nombre, datos.altura, mid)
+            respuesta.status_code = 202
+            return {"descarga_id": ficha["id"], "nombre": nombre}
         if datos.momento_id is not None:
             with s.lock:
-                momento = next((m for m in s.momentos if m["id"] == datos.momento_id), None)
-            if momento is None:
-                raise HTTPException(404, "Ese momento no existe.")
+                if not any(m["id"] == datos.momento_id for m in s.momentos):
+                    raise HTTPException(404, "Ese momento no existe.")
             proyecto = s.convertir_momento(datos.momento_id)
         else:
-            if datos.segundos not in ULTIMOS_S:
-                raise HTTPException(422, "Elige 30, 60 o 90 segundos.")
-            momento = None
-            b = s.cobertura()
-            a = max(0.0, b - datos.segundos)
-            nombre = f"{titulo} – últimos {datos.segundos} s"
+            a, b, nombre, _ = _tramo_pedido(s, datos.segundos, None)
             proyecto = s.crear_clip(a, b, nombre)
     except ErrorMedia as exc:
         raise HTTPException(409, str(exc)) from exc
     return {"proyecto_id": proyecto["id"], "nombre": proyecto["nombre"]}
+
+
+@router.post("/{sid}/descargas/{did}/usar-bufer", status_code=201)
+def usar_bufer(sid: str, did: str) -> dict:
+    try:
+        proyecto = _sesion_por_id(sid).usar_bufer_de(did)
+    except ErrorMedia as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"proyecto_id": proyecto["id"], "nombre": proyecto["nombre"]}
+
+
+@router.post("/{sid}/descargas/{did}/cancelar")
+def cancelar_descarga(sid: str, did: str) -> dict:
+    if not _sesion_por_id(sid).cancelar_descarga(did):
+        raise HTTPException(404, "Esa descarga ya no existe.")
+    return {"ok": True}
 
 
 @router.post("/{sid}/parar")

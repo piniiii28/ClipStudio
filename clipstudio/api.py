@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import youtube
-from . import __version__, actualizaciones, config, cortes, db, fondos_remotos, hashtags, importer, pipeline, reframe, subtitles, suggest, vivo
+from . import __version__, actualizaciones, ajustes, config, cortes, db, fondos_remotos, hashtags, importer, pipeline, reframe, subtitles, suggest, vivo
 from .pipeline import gestor
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -32,6 +32,7 @@ HOSTS_LOCALES = {"127.0.0.1", "localhost", "[::1]", "::1"}
 @asynccontextmanager
 async def _ciclo(_: FastAPI):
     db.iniciar()
+    ajustes.cargar()
     db.marcar_interrumpidos()
     pipeline.limpiar_huerfanos()
     gestor.iniciar()
@@ -493,7 +494,9 @@ def guardar_preferencias(datos: Preferencias) -> dict:
 @app.post("/api/proyectos/{pid}/abrir-carpeta")
 def abrir_carpeta(pid: str) -> dict:
     _proyecto(pid)
-    carpeta = pipeline.carpeta_proyecto(pid) / "exportaciones"
+    # Si hay una carpeta de exportaciones elegida en Ajustes y existe, se abre esa.
+    elegida = ajustes.carpeta_exportaciones()
+    carpeta = elegida if elegida is not None and elegida.is_dir() else pipeline.carpeta_proyecto(pid) / "exportaciones"
     carpeta.mkdir(parents=True, exist_ok=True)
     if hasattr(os, "startfile"):
         os.startfile(carpeta)  # type: ignore[attr-defined]
@@ -780,13 +783,15 @@ def ver_fondo(nombre: str) -> FileResponse:
 
 @app.post("/api/fondos/abrir-carpeta")
 def abrir_carpeta_fondos() -> dict:
-    config.FONDOS_DIR.mkdir(parents=True, exist_ok=True)
+    carpeta = ajustes.carpeta_fondos()
+    carpeta.mkdir(parents=True, exist_ok=True)
     if hasattr(os, "startfile"):
-        os.startfile(config.FONDOS_DIR)  # type: ignore[attr-defined]
-    return {"carpeta": str(config.FONDOS_DIR)}
+        os.startfile(carpeta)  # type: ignore[attr-defined]
+    return {"carpeta": str(carpeta)}
 
 
 app.include_router(fondos_remotos.router)
+app.include_router(ajustes.router)
 app.include_router(vivo.router)
 app.include_router(actualizaciones.router)
 

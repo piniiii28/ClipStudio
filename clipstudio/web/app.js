@@ -2,6 +2,7 @@
 // Todo el texto que viene del servidor se inserta con textContent (nunca innerHTML).
 
 import { vistaVivo } from "./vivo.js";
+import { vistaAjustes } from "./ajustes.js";
 import { crearSelectorStream, dibujarStream } from "./encuadre-stream.js";
 import { iniciarActualizaciones } from "./actualizaciones.js";
 
@@ -106,14 +107,16 @@ function navegar() {
   vista.replaceChildren();
   const enVivo = location.hash === "#/vivo";
   const enYouTube = location.hash === "#/youtube";
+  const enAjustes = location.hash === "#/ajustes";
   const m = location.hash.match(/^#\/p\/([0-9a-f]{32})$/);
-  vista.className = enVivo || enYouTube ? "vista-vivo" : m ? "vista-editor" : "vista-proyectos";
+  vista.className = enAjustes ? "vista-ajustes" : enVivo || enYouTube ? "vista-vivo" : m ? "vista-editor" : "vista-proyectos";
   for (const enlace of document.querySelectorAll(".barra nav a")) {
-    if (enlace.hash === (enVivo ? "#/vivo" : enYouTube ? "#/youtube" : "#/")) enlace.setAttribute("aria-current", m ? "location" : "page");
+    if (enlace.hash === (enAjustes ? "#/ajustes" : enVivo ? "#/vivo" : enYouTube ? "#/youtube" : "#/")) enlace.setAttribute("aria-current", m ? "location" : "page");
     else enlace.removeAttribute("aria-current");
   }
   if (enVivo) return vistaVivo(contextoVista());
   if (enYouTube) return vistaYouTube(contextoVista());
+  if (enAjustes) return vistaAjustes(contextoVista());
   if (m) vistaEditor(m[1], generacion); else vistaProyectos();
 }
 window.addEventListener("hashchange", navegar);
@@ -1455,6 +1458,8 @@ async function vistaEditor(pid, miGeneracion) {
         h("div", { class: "fila" }, h("strong", { class: "crece" }, e.titulo), h("span", { class: "etiqueta " + e.estado }, ESTADOS[e.estado] || e.estado)),
         activo ? h("div", { class: "progreso" }, h("div", { style: `width:${e.progreso}%` })) : null,
         e.estado === "error" ? h("p", { class: "mensaje-error pequeno", style: "margin-top:6px" }, e.error || "Error desconocido.") : null,
+        e.estado === "listo" && e.copia ? h("p", { class: "tenue pequeno", style: "margin-top:6px" }, `Copia guardada en: ${e.copia}`) : null,
+        e.estado === "listo" && e.aviso ? h("p", { class: "mensaje-error pequeno", style: "margin-top:6px" }, e.aviso) : null,
         h("div", { class: "fila", style: "margin-top:8px" },
           e.estado === "listo" ? h("a", { class: "boton", href: `/api/exportaciones/${e.id}/archivo?descargar=true` }, "Descargar") : null,
           e.estado === "listo" ? h("a", { class: "boton", href: `/api/exportaciones/${e.id}/archivo`, target: "_blank", rel: "noopener" }, "Ver") : null,

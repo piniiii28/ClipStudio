@@ -63,8 +63,9 @@ WHISPER_DEVICE = os.environ.get("CLIPSTUDIO_WHISPER_DEVICE", "cpu")
 MAX_UPLOAD_BYTES = int(_float("CLIPSTUDIO_MAX_UPLOAD_GB", 8) * 1024**3)
 MAX_DURATION_S = _float("CLIPSTUDIO_MAX_DURATION_MIN", 720) * 60
 
-# Minutos de directo que se conservan en disco mientras se graba (modo en vivo).
-VIVO_BUFER_MIN = max(1.0, _float("CLIPSTUDIO_VIVO_BUFER_MIN", 60))
+# Minutos de directo que se conservan en disco mientras se graba (modo en vivo). Es el valor por
+# defecto: en la pantalla «En vivo» se elige 10, 20, 30 o 60 y se recuerda como preferencia.
+VIVO_BUFER_MIN = max(1.0, _float("CLIPSTUDIO_VIVO_BUFER_MIN", 20))
 
 YOUTUBE_API_KEY = os.environ.get("CLIPSTUDIO_YOUTUBE_API_KEY", "").strip()
 YTDLP_COOKIES_BROWSER = os.environ.get("CLIPSTUDIO_YTDLP_COOKIES_BROWSER", "").strip()

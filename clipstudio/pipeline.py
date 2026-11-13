@@ -18,7 +18,7 @@ import traceback
 from pathlib import Path
 from typing import Callable
 
-from . import config, cortes, db, fondos_remotos, importer, media, reframe, subtitles, suggest, transcribe
+from . import ajustes, config, cortes, db, fondos_remotos, importer, media, reframe, subtitles, suggest, transcribe
 from .media import Cancelacion, Cancelado, ErrorMedia
 
 log = logging.getLogger("clipstudio")
@@ -68,10 +68,11 @@ EXTENSIONES_FONDO = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
 
 def listar_fondos() -> list[Path]:
     """Videos de la carpeta de fondos (gameplay para el encuadre dividido), ordenados por nombre."""
-    if not config.FONDOS_DIR.is_dir():
+    carpeta = ajustes.carpeta_fondos()
+    if not carpeta.is_dir():
         return []
     return sorted(
-        (f for f in config.FONDOS_DIR.iterdir() if f.is_file() and f.suffix.lower() in EXTENSIONES_FONDO),
+        (f for f in carpeta.iterdir() if f.is_file() and f.suffix.lower() in EXTENSIONES_FONDO),
         key=lambda f: f.name.lower(),
     )
 
@@ -89,8 +90,8 @@ def _elegir_fondo(estilo: dict) -> dict:
         remoto = fondos_remotos.buscar(elegido[len(subtitles.PREFIJO_FONDO_REMOTO):])
         if remoto and not remoto["oculto"]:
             return {"remoto": remoto, "credito": remoto["credito"]}
-    elif elegido and (config.FONDOS_DIR / elegido).is_file():
-        return {"ruta": config.FONDOS_DIR / elegido, "credito": ""}
+    elif elegido and (ajustes.carpeta_fondos() / elegido).is_file():
+        return {"ruta": ajustes.carpeta_fondos() / elegido, "credito": ""}
     locales = listar_fondos()
     if locales:
         return {"ruta": random.choice(locales), "credito": ""}
@@ -530,7 +531,16 @@ def exportar(exportacion_id: str, cancel: Cancelacion) -> None:
         )
         final = carpeta / f"{exportacion_id}.mp4"
         temporal.replace(final)
-        db.actualizar("exportaciones", exportacion_id, estado="listo", progreso=100, archivo=final.name, error=None)
+        copia, aviso = None, None
+        try:
+            # Copia legible en la carpeta elegida en Ajustes; la interna se conserva (la usa la app).
+            copiada = ajustes.copiar_exportacion(final, exp.get("titulo") or "clip", exp.get("clip_id") or exportacion_id)
+            copia = str(copiada) if copiada else None
+        except OSError as exc:
+            log.warning("No se pudo copiar la exportación a la carpeta elegida", exc_info=True)
+            aviso = f"El clip está listo, pero no se pudo copiar a la carpeta de exportaciones ({exc.strerror or exc})."
+        db.actualizar("exportaciones", exportacion_id, estado="listo", progreso=100, archivo=final.name, error=None,
+                      copia=copia, aviso=aviso)
     finally:
         shutil.rmtree(trabajo, ignore_errors=True)
 

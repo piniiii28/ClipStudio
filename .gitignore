@@ -16,3 +16,5 @@ docs/codex/
 
 # Restos de pruebas de un agente (se pueden borrar)
 .pruebas_cortes_*/
+
+.cache/

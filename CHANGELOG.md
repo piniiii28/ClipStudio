@@ -4,6 +4,30 @@ Formato: una entrada por versión publicada, con lo añadido, lo corregido y lo 
 que falta. El detalle técnico y las pruebas de cada función están en
 [docs/estado.md](docs/estado.md).
 
+## 0.2.3 — 2026-11-13
+
+### Añadido
+- **Búfer del directo más ligero**: al conectar se elige la calidad (480p, 720p —predeterminada—
+  o 1080p «Original») y la duración (10, 20 —predeterminada—, 30 o 60 min). Se muestra el consumo
+  estimado por hora (medido con el bitrate del directo cuando yt-dlp lo da; si no, orientativo).
+  Ambas elecciones se recuerdan. `CLIPSTUDIO_VIVO_BUFER_MIN` sigue valiendo como valor por defecto.
+- **Elegir la calidad al obtener el clip**: un diálogo ofrece «Del búfer (inmediato)» con su
+  resolución real y, si la plataforma lo permite, «Alta calidad desde la plataforma»
+  (YouTube con retroceso: última hora de la lista HLS; Twitch y Kick: VOD en curso). Solo se
+  descarga ese tramo, se alinea con el búfer comparando el audio y se muestra el progreso con
+  opción de cancelar o de usar el búfer si falla. Cuando no está disponible se explica el motivo.
+  La elección puede recordarse («Al crear un clip»).
+- **Ajustes**: carpeta de exportaciones (copia legible `<título>_<id>.mp4` de cada MP4, sin pisar
+  archivos), carpeta del búfer en vivo y carpeta de fondos, con selector nativo de carpetas en la
+  app de escritorio y validación en el servidor. Proyectos, transcripciones y modelos siguen en la
+  carpeta de datos de la aplicación (cambiarla entera queda fuera de esta versión).
+
+### Problemas conocidos
+- YouTube: en el búfer del directo el video puede ir unos 5 s desfasado respecto al audio
+  (video y audio llegan en listas separadas). Pendiente de corregir.
+- Twitch con anuncios al conectar: no se puede alinear la alta calidad; se ofrece el búfer.
+- Kick: la alta calidad no se ha probado con un directo real.
+
 ## 0.2.2 — 2026-11-13
 
 ### Corregido

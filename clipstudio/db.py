@@ -111,6 +111,7 @@ COLUMNAS_NUEVAS = {
     "proyectos": {"min_s": "REAL NOT NULL DEFAULT 15", "max_s": "REAL NOT NULL DEFAULT 60",
                   "audio_idioma": "TEXT", "es_clip_vivo": "INTEGER NOT NULL DEFAULT 0", "encuadre_vivo": "TEXT NOT NULL DEFAULT '{}'"},
     "momentos_vivo": {"origen": "TEXT NOT NULL DEFAULT 'audio'", "error": "TEXT"},
+    "exportaciones": {"copia": "TEXT", "aviso": "TEXT"},   # copia en la carpeta de exportaciones elegida
 }
 
 

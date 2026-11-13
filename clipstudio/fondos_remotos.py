@@ -441,11 +441,17 @@ def _locales() -> list[dict]:
     return [{"nombre": f.name, "tamano_mb": round(f.stat().st_size / 1024**2, 1)} for f in pipeline.listar_fondos()]
 
 
+def _carpeta_fondos() -> Path:
+    from . import ajustes
+
+    return ajustes.carpeta_fondos()
+
+
 def _listado() -> dict:
     locales = _locales()
     todos = catalogo(True)
     return {
-        "carpeta": str(config.FONDOS_DIR),
+        "carpeta": str(_carpeta_fondos()),
         "locales": locales,
         "fondos": locales,               # nombre anterior de la lista de locales (compatibilidad)
         "remotos": [f for f in todos if not f["oculto"]],

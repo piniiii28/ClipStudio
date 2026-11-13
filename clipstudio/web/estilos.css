@@ -424,3 +424,28 @@ button.enlace { background: none; border: 0; padding: 0; color: var(--info); tex
 .youtube-video-info { padding: 14px; }
 .youtube-video h2 { overflow-wrap: anywhere; margin-bottom: 4px; }
 .youtube-video-info .fila { margin-top: 12px; }
+
+/* ---- ajustes de carpetas ---- */
+.vista-ajustes { max-width: 1256px; }
+.ajustes-cabecera { margin-bottom: 26px; }
+.ajustes-contenido { display: grid; gap: 24px; }
+.ajustes-carpetas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.ajustes-carpeta { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ajustes-carpeta h3 { margin: 0; font-size: 15px; color: var(--texto); text-transform: none; letter-spacing: 0; }
+.ajustes-carpeta p { margin: 0; }
+.ajustes-carpeta > .fila:has(button) { margin-top: auto; padding-top: 4px; }
+.ajustes-ruta { padding: 10px 12px; background: var(--fondo); border: 1px solid var(--borde); border-radius: var(--radio-ctl); overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; font-size: 13px; }
+.ajustes-editar { display: grid; gap: 8px; border-top: 1px solid var(--borde); padding-top: 12px; }
+.ajustes-editar input { display: block; width: 100%; margin-top: 6px; }
+.ajustes-datos > p { max-width: 95ch; }
+.icono-ajustes::before { inset: 5%; border: 1.5px solid; border-radius: 4px; }
+.icono-ajustes::after { inset: 32%; border: 1.5px solid; border-radius: 50%; }
+@media (max-width: 1000px) { .ajustes-carpetas { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- En vivo: diálogo de calidad del clip y descargas en alta calidad ---- */
+.dialogo-calidad { max-width: 520px; width: calc(100% - 32px); padding: 20px; border: 1px solid var(--borde, #444); border-radius: 12px; background: var(--panel, #1a1d24); color: inherit; }
+.dialogo-calidad::backdrop { background: rgba(0, 0, 0, .55); }
+.dialogo-calidad h2 { margin-top: 0; }
+.opcion-calidad { display: flex; align-items: center; gap: 6px; margin: 6px 0; cursor: pointer; }
+.lista-descargas { display: grid; gap: 10px; margin-bottom: 10px; }
+.descarga-vivo { padding: 10px; border: 1px solid var(--borde, #444); border-radius: 8px; }

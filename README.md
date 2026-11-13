@@ -220,6 +220,12 @@ El lector de Kick utiliza el servicio público de su web, cuyo contrato puede ca
 
 ### Vista del directo y encuadre de streams
 
+Al conectar eliges la **calidad del búfer** (480p, 720p o 1080p) y su **duración** (10, 20, 30 o 60
+minutos), con el consumo estimado por hora; se recuerdan. Al pulsar «Clip de los últimos N s» o «Crear clip»
+aparece un diálogo para elegir **«Del búfer (inmediato)»** o **«Alta calidad desde la plataforma»**
+(YouTube con retroceso, VOD de Twitch/Kick), que descarga solo ese tramo. En **Ajustes** se eligen las carpetas
+de exportaciones, del búfer y de fondos.
+
 El panel **En vivo** muestra una imagen reciente del video que está grabando. Se actualiza al
 cerrarse cada segmento, aproximadamente cada 6 s, con el retraso propio de la captura.
 
