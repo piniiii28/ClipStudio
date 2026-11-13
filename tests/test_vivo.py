@@ -143,3 +143,77 @@ def test_chat_tiene_lectores_para_twitch_y_youtube(tmp_path):
     estado = lambda *args: None
     assert isinstance(chat.crear_lector("https://www.twitch.tv/tenz", tmp_path, estado), chat.LectorTwitch)
     assert isinstance(chat.crear_lector("https://www.youtube.com/watch?v=video", tmp_path, estado), chat.LectorYouTube)
+
+
+@pytest.fixture
+def sesion_marcadores(tmp_path, monkeypatch):
+    from clipstudio import config, db
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "datos.sqlite")
+    monkeypatch.setattr(config, "VIVO_DIR", tmp_path)
+    db.iniciar()
+    db.insertar("sesiones_vivo", {"id": "prueba", "url": "https://twitch.tv/prueba", "estado": "grabando"})
+    sesion = vivo.Sesion("prueba", "https://twitch.tv/prueba", automaticos=True)
+    sesion.estado = "grabando"
+    sesion.segmentos = list(SEGS)
+    return sesion
+
+
+def test_marcador_persiste_nota_sobre_video_disponible_sin_automatizar(sesion_marcadores):
+    from clipstudio import db
+    s = sesion_marcadores
+    fila = s.marcar_momento("  Buena jugada  ")
+    guardado = db.obtener("momentos_vivo", fila["id"])
+    assert guardado["tiempo"] == 60
+    assert guardado["motivo"] == "Buena jugada"
+    assert guardado["origen"] == "manual"
+    assert guardado["estado"] == "nuevo"
+    assert s._clips_pendientes.empty()
+
+
+def test_marcador_rechaza_sin_video_y_no_oculta_fallo_de_guardado(sesion_marcadores, monkeypatch):
+    s = sesion_marcadores
+    monkeypatch.setattr(vivo.db, "insertar", lambda *a, **kw: (_ for _ in ()).throw(OSError()))
+    with pytest.raises(ErrorMedia, match="guardar"):
+        s.marcar_momento("")
+    s.segmentos = []
+    with pytest.raises(ErrorMedia, match="Espera"):
+        s.marcar_momento("")
+
+
+def test_momentos_caducados_y_convertidos(sesion_marcadores):
+    s = sesion_marcadores
+    s.segmentos = SEGS[5:]
+    s.momentos = [
+        {"id": "viejo", "tiempo": 29, "proyecto_id": None},
+        {"id": "limite", "tiempo": 30, "proyecto_id": None},
+        {"id": "guardado", "tiempo": 10, "proyecto_id": "p"},
+    ]
+    publico = s.publico()
+    assert publico["buffer_inicio_s"] == 30
+    assert [m["caducado"] for m in publico["momentos"]] == [True, False, False]
+
+
+def test_recorte_rechaza_huecos_pero_tolera_redondeo_de_segmentos():
+    with pytest.raises(ErrorMedia, match="Falta vídeo"):
+        vivo.plan_recorte([Seg("a.ts", 0, 6, 1), Seg("b.ts", 12, 18, 1)], 0, 18)
+    cubiertos, desfase, duracion = vivo.plan_recorte([Seg("a.ts", 0, 6, 1), Seg("b.ts", 6.001, 12, 1)], 0, 12)
+    assert len(cubiertos) == 2 and desfase == 0 and duracion == 12
+
+
+def test_api_marcador_valida_nota_y_sesion_y_rechaza_caducado(sesion_marcadores, monkeypatch):
+    from fastapi.testclient import TestClient
+    from clipstudio.api import app
+    s = sesion_marcadores
+    monkeypatch.setattr(vivo, "sesion_actual", lambda: s)
+    cliente = TestClient(app, base_url="http://localhost")
+    assert cliente.post("/api/vivo/otra/momentos", json={}).status_code == 404
+    assert cliente.post("/api/vivo/prueba/momentos", json={"nota": "x" * 161}).status_code == 422
+    respuesta = cliente.post("/api/vivo/prueba/momentos", json={"nota": " "})
+    assert respuesta.status_code == 201
+    assert respuesta.json()["motivo"] == "Marcador manual"
+    s.momentos.append({"id": "caducado", "tiempo": 10, "proyecto_id": None})
+    s.segmentos = SEGS[5:]
+    respuesta = cliente.post("/api/vivo/prueba/clip", json={"momento_id": "caducado"})
+    assert respuesta.status_code == 409 and "fuera del búfer" in respuesta.json()["detail"]
+    s.estado = "detenido"
+    assert cliente.post("/api/vivo/prueba/momentos", json={}).status_code == 409

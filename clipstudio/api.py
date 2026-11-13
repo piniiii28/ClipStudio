@@ -11,13 +11,14 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import youtube
 from . import __version__, actualizaciones, config, cortes, db, fondos_remotos, hashtags, importer, pipeline, reframe, subtitles, suggest, vivo
 from .pipeline import gestor
 
@@ -186,8 +187,38 @@ def _duracion_clips(min_s: float, max_s: float) -> dict:
 class ProyectoUrl(BaseModel):
     url: str = Field(max_length=2000)
     idioma: str = "auto"
+    audio_idioma: str | None = Field(None, pattern=r"^[a-zA-Z0-9-]{1,35}$")
     min_s: float = 15
     max_s: float = 60
+
+
+class InspeccionarAudio(BaseModel):
+    url: str = Field(max_length=2000)
+
+
+@app.post("/api/youtube/audio")
+def inspeccionar_audio(datos: InspeccionarAudio) -> dict:
+    try:
+        url = youtube.url_video(datos.url)
+        if not config.find_tool("ffmpeg"):
+            raise HTTPException(503, "Instala FFmpeg para consultar las pistas.")
+        return {"idiomas": importer.idiomas_audio(url)}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except importer.ErrorMedia as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/api/youtube/tendencias")
+def tendencias_youtube(region: str = "CO") -> dict:
+    if not re.fullmatch(r"[A-Z]{2}", region):
+        raise HTTPException(422, "Elige una región válida.")
+    if not config.YOUTUBE_API_KEY:
+        return {"configurado": False, "videos": []}
+    try:
+        return {"configurado": True, "videos": youtube.tendencias(region, config.YOUTUBE_API_KEY)}
+    except youtube.ErrorYouTube as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 
 @app.post("/api/proyectos/url", status_code=201)
@@ -203,7 +234,7 @@ def crear_desde_url(datos: ProyectoUrl) -> dict:
         raise HTTPException(503, "FFmpeg no esta instalado. Ejecuta: uv run python scripts/instalar_ffmpeg.py")
     p = db.insertar(
         "proyectos",
-        {"nombre": url, "origen": "url", "url": url, "idioma": datos.idioma,
+        {"nombre": url, "origen": "url", "url": url, "idioma": datos.idioma, "audio_idioma": datos.audio_idioma,
          "estado": "en_cola", "paso": "en_cola", "mensaje": "En cola...", "progreso": 0, **duracion},
     )
     gestor.encolar("proyecto", p["id"])
@@ -483,6 +514,31 @@ def crear_clip(pid: str, datos: ClipNuevo) -> dict:
     )
 
 
+@app.post("/api/clips/{cid}/duplicar", status_code=201)
+def duplicar_clip(cid: str) -> dict:
+    with _transicion:
+        clip = _clip(cid)
+        _proyecto_listo(clip["proyecto_id"])
+        campos = ("proyecto_id", "inicio", "fin", "encuadre", "recorte_x", "subtitulos",
+                  "estilo", "cortes", "trayectoria", "composicion", "tiktok")
+        copia = {k: clip[k] for k in campos if k in clip}
+        return db.insertar("clips", {**copia, "titulo": f'{clip["titulo"][:112]} (copia)',
+                                     "origen": "manual", "motivos": []})
+
+
+@app.get("/api/clips/{cid}/subtitulos.srt")
+def descargar_subtitulos(cid: str) -> Response:
+    clip = _clip(cid)
+    inicio, fin = clip["inicio"], clip["fin"]
+    cues = subtitles.recortar(clip["subtitulos"], inicio, fin)
+    cues = cortes.remapear_subtitulos(cues, inicio, fin, clip["cortes"])
+    if not cues:
+        raise HTTPException(409, "El clip no tiene subtítulos en el tramo conservado.")
+    nombre = _nombre_seguro(clip["titulo"]) + ".srt"
+    return Response(subtitles.a_srt(cues), media_type="application/x-subrip; charset=utf-8",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(nombre)}"})
+
+
 class TikTokPublicacion(BaseModel):
     contexto: str = Field("", max_length=200)
     texto: str = Field("", max_length=1000)
@@ -627,7 +683,7 @@ def encuadre_auto(cid: str) -> dict:
     encuadre = "dividido" if clip["encuadre"] == "dividido" else "rellenar"
     db.actualizar("clips", cid, recorte_x=seguimiento["recorte_x"],
                   trayectoria=seguimiento["trayectoria"], encuadre=encuadre)
-    return {"detectado": True, "clip": _clip(cid)}
+    return {"detectado": True, "clip": _clip(cid), "cobertura": seguimiento.get("cobertura")}
 
 
 # ---------- exportaciones ----------

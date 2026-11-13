@@ -104,8 +104,16 @@ function navegar() {
   temporizador = null;
   if (limpiarVista) { limpiarVista(); limpiarVista = null; }
   vista.replaceChildren();
-  if (location.hash === "#/vivo") return vistaVivo(contextoVista());
+  const enVivo = location.hash === "#/vivo";
+  const enYouTube = location.hash === "#/youtube";
   const m = location.hash.match(/^#\/p\/([0-9a-f]{32})$/);
+  vista.className = enVivo || enYouTube ? "vista-vivo" : m ? "vista-editor" : "vista-proyectos";
+  for (const enlace of document.querySelectorAll(".barra nav a")) {
+    if (enlace.hash === (enVivo ? "#/vivo" : enYouTube ? "#/youtube" : "#/")) enlace.setAttribute("aria-current", m ? "location" : "page");
+    else enlace.removeAttribute("aria-current");
+  }
+  if (enVivo) return vistaVivo(contextoVista());
+  if (enYouTube) return vistaYouTube(contextoVista());
   if (m) vistaEditor(m[1], generacion); else vistaProyectos();
 }
 window.addEventListener("hashchange", navegar);
@@ -133,10 +141,60 @@ async function estadoSistema() {
   return e;
 }
 
+function vistaYouTube({ vigente }) {
+  const region = h("select", { "aria-label": "Región de YouTube" },
+    [["CO", "Colombia"], ["MX", "México"], ["AR", "Argentina"], ["ES", "España"], ["US", "Estados Unidos"]]
+      .map(([codigo, pais]) => h("option", { value: codigo }, pais)));
+  const estado = h("p", { class: "tenue", role: "status" });
+  const lista = h("div", { class: "youtube-lista" });
+  const actualizar = h("button", { onclick: cargar }, "Actualizar");
+  vista.append(
+    h("header", { class: "portada portada-vivo" }, h("h1", {}, "Tendencias de YouTube"),
+      h("p", { class: "tenue" }, "Explora videos populares por país y lleva un enlace a Proyectos.")),
+    h("div", { class: "fila youtube-filtros" }, region, actualizar), estado, lista);
+  region.addEventListener("change", cargar);
+
+  let consulta = 0;
+  async function cargar() {
+    const actual = ++consulta;
+    actualizar.disabled = true;
+    estado.textContent = "Cargando videos…";
+    lista.replaceChildren();
+    try {
+      const datos = await api("GET", `/youtube/tendencias?region=${region.value}`);
+      if (!vigente() || actual !== consulta) return;
+      if (!datos.configurado) {
+        estado.textContent = "Para cargar tendencias, configura CLIPSTUDIO_YOUTUBE_API_KEY en el archivo .env y reinicia ClipStudio.";
+        lista.append(h("a", { class: "boton", href: "https://charts.youtube.com/", target: "_blank", rel: "noopener" }, "Abrir YouTube Charts"));
+        return;
+      }
+      estado.textContent = datos.videos.length ? "" : "YouTube no devolvió videos para esta región.";
+      lista.append(...datos.videos.map((video) =>
+        h("article", { class: "panel youtube-video" },
+          h("img", { src: video.miniatura, alt: "", loading: "lazy", referrerPolicy: "no-referrer" }),
+          h("div", { class: "youtube-video-info" }, h("h2", {}, video.titulo), h("p", { class: "tenue" }, video.canal),
+            h("div", { class: "fila" },
+              h("button", { class: "primario", onclick: () => {
+                enlaceTendencia = video.url;
+                location.hash = "#/";
+              } }, "Usar enlace"),
+              h("a", { class: "boton", href: video.url, target: "_blank", rel: "noopener" }, "Ver en YouTube"))))));
+    } catch (error) {
+      if (vigente() && actual === consulta) estado.textContent = error.message;
+    } finally {
+      if (actual === consulta) actualizar.disabled = false;
+    }
+  }
+  cargar();
+}
+
+let enlaceTendencia = "";
+
 // ---------- vista: proyectos ----------
 
 function vistaProyectos() {
-  const lista = h("div", { class: "lista-proyectos" });
+  const lista = h("div", { class: "lista-proyectos", "aria-labelledby": "titulo-proyectos" });
+  const conteo = h("span", { class: "conteo-proyectos" });
   const selIdioma = () => h("select", { "aria-label": "Idioma del video" }, IDIOMAS.map(([v, t]) => h("option", { value: v }, t)));
 
   // Duracion deseada de los clips propuestos (vale para archivo y para enlace)
@@ -158,7 +216,8 @@ function vistaProyectos() {
   const textoSubida = h("p", { class: "tenue pequeno" });
   let subida = null;
   const zona = h("div", { class: "soltar", tabIndex: 0, role: "button" },
-    h("strong", {}, "Arrastra un video aquí"), h("br"), "o haz clic para elegirlo");
+    h("span", { class: "icono icono-subir", "aria-hidden": "true" }),
+    h("strong", {}, "Arrastra un video aquí"), h("span", {}, "o haz clic para elegirlo"));
   zona.addEventListener("click", () => entrada.click());
   zona.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); entrada.click(); } });
   zona.addEventListener("dragover", (e) => { e.preventDefault(); zona.classList.add("encima"); });
@@ -201,7 +260,42 @@ function vistaProyectos() {
 
   // Importar por enlace
   const idiomaUrl = selIdioma();
-  const url = h("input", { type: "url", class: "crece", placeholder: "https://www.youtube.com/watch?v=…", "aria-label": "Enlace del video" });
+  const url = h("input", { type: "url", class: "crece", value: enlaceTendencia, placeholder: "https://www.youtube.com/watch?v=…", "aria-label": "Enlace del video" });
+  enlaceTendencia = "";
+  const audioOriginal = () => h("option", { value: "" }, "Audio predeterminado");
+  const audio = h("select", { "aria-label": "Idioma de audio", hidden: true }, audioOriginal());
+  const estadoAudio = h("span", { class: "tenue pequeno", role: "status" });
+  const nombreIdioma = typeof Intl.DisplayNames === "function"
+    ? new Intl.DisplayNames(["es"], { type: "language", fallback: "code" }) : null;
+  const consultarAudio = h("button", { type: "button", onclick: async () => {
+    const enlace = url.value.trim();
+    if (!enlace || consultarAudio.disabled) return;
+    consultarAudio.disabled = true;
+    estadoAudio.textContent = "Buscando pistas…";
+    audio.hidden = true;
+    audio.replaceChildren(audioOriginal());
+    try {
+      const datos = await api("POST", "/youtube/audio", { url: enlace });
+      if (url.value.trim() !== enlace || !url.isConnected) return;
+      for (const codigo of datos.idiomas) {
+        let nombre = codigo;
+        try { nombre = nombreIdioma?.of(codigo) || codigo; } catch { /* código de la plataforma */ }
+        audio.append(h("option", { value: codigo }, nombre));
+      }
+      audio.hidden = !datos.idiomas.length;
+      estadoAudio.textContent = datos.idiomas.length ? "" : "YouTube no expuso pistas con idioma para este enlace.";
+    } catch (error) {
+      if (url.value.trim() === enlace && url.isConnected) estadoAudio.textContent = error.message;
+    } finally {
+      consultarAudio.disabled = false;
+    }
+  } }, "Buscar pistas de audio");
+  function limpiarAudio() {
+    audio.replaceChildren(audioOriginal());
+    audio.hidden = true;
+    estadoAudio.textContent = "";
+  }
+  url.addEventListener("input", limpiarAudio);
   const botonUrl = h("button", { class: "primario" }, "Importar");
   const formularioUrl = h("form", { class: "fila", onsubmit: async (e) => {
     e.preventDefault();
@@ -209,39 +303,55 @@ function vistaProyectos() {
     const d = duracionClips();
     if (!d) return;
     botonUrl.disabled = true;
-    const p = await intentar(() => api("POST", "/proyectos/url", { url: url.value.trim(), idioma: idiomaUrl.value, ...d }));
+    const p = await intentar(() => api("POST", "/proyectos/url", { url: url.value.trim(), idioma: idiomaUrl.value, audio_idioma: audio.value || null, ...d }));
     botonUrl.disabled = false;
-    if (p) { url.value = ""; avisar("Importación en cola."); refrescar(); }
+    if (p) { url.value = ""; limpiarAudio(); avisar("Importación en cola."); refrescar(); }
   } }, url, botonUrl);
 
   vista.append(
-    h("div", { class: "portada" },
-      h("h1", {}, "Convierte un video largo en clips verticales"),
-      h("p", { class: "tenue" }, "Sube un video o pega un enlace. Todo se procesa en este equipo: nada sale de él.")),
-    h("div", { class: "fila ajuste-inicial" }, h("span", {}, "Duración de los clips propuestos: entre"), minClip, "y", maxClip, "segundos",
-      h("span", { class: "tenue pequeno" }, "(después podrás dividir el video completo en partes iguales)")),
-    h("div", { class: "nuevo" },
-      h("section", { class: "panel" }, h("h2", {}, "Desde un archivo"), zona, entrada,
-        h("div", { class: "fila", style: "margin-top:10px" }, h("span", { class: "tenue pequeno" }, "Idioma hablado:"), idiomaArchivo, cancelarSubida),
-        progresoSubida, textoSubida),
-      h("section", { class: "panel" }, h("h2", {}, "Desde un enlace"), formularioUrl,
-        h("div", { class: "fila", style: "margin-top:10px" }, h("span", { class: "tenue pequeno" }, "Idioma hablado:"), idiomaUrl),
-        h("p", { class: "tenue pequeno", style: "margin-top:10px" },
-          "Funciona con YouTube y otras plataformas compatibles con yt-dlp. Importa solo videos propios o que tengas permiso para usar."))),
-    h("h2", { class: "titulo-lista" }, "Tus proyectos"),
+    h("header", { class: "portada portada-proyectos" },
+      h("div", { class: "portada-texto" },
+        h("h1", {}, "Convierte tus videos en clips verticales"),
+        h("p", { class: "tenue" }, "Importa un video para generar clips con subtítulos. El procesamiento se hace en tu equipo.")),
+      h("div", { class: "composicion", "aria-hidden": "true" },
+        h("div", { class: "composicion-fuente" }, h("div", { class: "composicion-pista" })),
+        h("div", { class: "composicion-clip" }, h("div", { class: "composicion-subtitulos" })))),
+    h("section", { class: "importacion", "aria-labelledby": "titulo-importacion" },
+      h("h2", { id: "titulo-importacion", class: "titulo-lista" }, "Nuevo proyecto"),
+      h("div", { class: "nuevo" },
+        h("section", { class: "panel fuente" },
+          h("div", { class: "fuente-cabecera" }, h("span", { class: "icono icono-video", "aria-hidden": "true" }),
+            h("div", {}, h("h3", {}, "Archivo local"), h("p", { class: "tenue pequeno" }, "Importa un video de tu equipo."))),
+          zona, entrada,
+          h("div", { class: "fila fuente-opciones" }, h("span", { class: "tenue pequeno" }, "Idioma hablado"), idiomaArchivo, cancelarSubida),
+          progresoSubida, textoSubida),
+        h("section", { class: "panel fuente" },
+          h("div", { class: "fuente-cabecera" }, h("span", { class: "icono icono-enlace", "aria-hidden": "true" }),
+            h("div", {}, h("h3", {}, "Enlace de video"), h("p", { class: "tenue pequeno" }, "YouTube y otras plataformas compatibles con yt-dlp."))),
+          h("div", { class: "fuente-enlace" }, formularioUrl,
+            h("div", { class: "fila" }, consultarAudio, audio, estadoAudio),
+            h("p", { class: "tenue pequeno" }, "Importa videos propios o que tengas permiso para usar.")),
+          h("div", { class: "fila fuente-opciones" }, h("span", { class: "tenue pequeno" }, "Idioma para transcribir"), idiomaUrl))),
+      h("div", { class: "fila ajuste-inicial" }, h("strong", {}, "Duración de los clips sugeridos"), minClip, "a", maxClip, "s")),
+    h("div", { class: "cabecera-lista" },
+      h("h2", { id: "titulo-proyectos", class: "titulo-lista" }, "Tus proyectos"), conteo),
     lista);
 
   async function refrescar() {
     const proyectos = await intentar(() => api("GET", "/proyectos"));
-    if (!proyectos) return;
-    lista.replaceChildren(...(proyectos.length ? proyectos.map(tarjeta) : [h("div", { class: "panel vacio" }, "Todavía no hay proyectos.")]));
+    if (!proyectos || !lista.isConnected) return;
+    conteo.textContent = proyectos.length;
+    lista.replaceChildren(...(proyectos.length ? proyectos.map(tarjeta) : [
+      h("div", { class: "panel vacio" }, h("span", { class: "icono icono-proyectos", "aria-hidden": "true" }),
+        h("strong", {}, "Todavía no hay proyectos"), h("p", {}, "Importa un archivo o un enlace para empezar."))]));
   }
 
   function tarjeta(p) {
     const activo = ACTIVOS.includes(p.estado);
     const accion = (texto, fn, clase = "") => h("button", { class: clase, onclick: async () => { await intentar(fn); refrescar(); } }, texto);
     return h("article", { class: "panel proyecto" },
-      h("div", {},
+      h("span", { class: "icono icono-video", "aria-hidden": "true" }),
+      h("div", { class: "proyecto-datos" },
         h("h3", {}, p.nombre),
         h("div", { class: "fila pequeno tenue", style: "margin-top:4px" },
           h("span", { class: "etiqueta " + p.estado }, ESTADOS[p.estado] || p.estado),
@@ -252,7 +362,7 @@ function vistaProyectos() {
           h("p", { class: "tenue pequeno", style: "margin-top:4px" }, `${p.mensaje || ""} ${Math.round(p.progreso)} %`)) : null,
         p.estado === "error" ? h("p", { class: "mensaje-error pequeno", style: "margin-top:6px" }, p.error || "Error desconocido.") : null,
         p.estado === "listo" && p.mensaje ? h("p", { class: "tenue pequeno", style: "margin-top:4px" }, p.mensaje) : null),
-      h("div", { class: "fila" },
+      h("div", { class: "fila proyecto-acciones" },
         p.estado === "listo" ? h("a", { class: "boton", href: "#/p/" + p.id }, "Abrir") : null,
         activo ? accion("Cancelar", () => api("POST", `/proyectos/${p.id}/cancelar`)) : null,
         ["error", "cancelado"].includes(p.estado) ? accion("Reintentar", () => api("POST", `/proyectos/${p.id}/reintentar`)) : null,
@@ -282,6 +392,8 @@ async function vistaEditor(pid, miGeneracion) {
 
   let clip = proyecto.clips[0] || null;
   let pestana = "subtitulos";
+  let escuchaFrase = null;
+  let busquedaTranscripcion = "";
   let seleccion = null;      // [indice, indice] de frases elegidas en la transcripcion
   let cancelado = false;
   const sugerenciasTikTok = new Map();
@@ -314,6 +426,23 @@ async function vistaEditor(pid, miGeneracion) {
   const panelDerecho = h("div", {});
   const controles = h("div", { class: "controles" });
   const guardado = h("span", { class: "tenue pequeno", role: "status" });
+  const velocidad = h("select", { "aria-label": "Velocidad de reproducción de la vista previa" },
+    [0.5, 0.75, 1, 1.25, 1.5, 2].map((tasa) =>
+      h("option", { value: tasa, selected: tasa === 1 }, `${String(tasa).replace(".", ",")}×`)));
+  velocidad.addEventListener("change", () => {
+    const tasa = Number(velocidad.value);
+    video.playbackRate = tasa;
+    juego.playbackRate = tasa;
+  });
+  const tituloPrevio = h("h2", {}, "Vista previa");
+  const zonaSegura = h("div", { class: "zona-segura", hidden: true, "aria-hidden": "true" });
+  telefono.append(zonaSegura);
+  const mostrarGuia = h("button", { class: "mini", "aria-pressed": "false",
+    title: "Guía orientativa para mantener el texto lejos de los controles de redes sociales",
+    onclick: () => {
+      zonaSegura.hidden = !zonaSegura.hidden;
+      mostrarGuia.setAttribute("aria-pressed", String(!zonaSegura.hidden));
+    } }, "Zona segura");
 
   // --- guardado con retraso ---
   // Los cambios se acumulan POR CLIP y se envian de uno en uno, en orden. Un cambio solo
@@ -663,11 +792,12 @@ async function vistaEditor(pid, miGeneracion) {
   let cuadro = 0;
   function bucle() {
     if (cancelado) return;
-    if (clip && !video.paused) {
+    if (clip && !escuchaFrase && !video.paused) {
       const corte = corteEn(video.currentTime);
       if (corte) video.currentTime = corte.fin;
     }
-    if (clip && !video.paused && video.currentTime >= clip.fin) { video.pause(); video.currentTime = clip.inicio; }
+    if (escuchaFrase && !video.paused && video.currentTime >= escuchaFrase.fin) { video.pause(); video.currentTime = escuchaFrase.inicio; }
+    if (clip && !escuchaFrase && !video.paused && video.currentTime >= clip.fin) { video.pause(); video.currentTime = clip.inicio; }
     pintarSubtitulo();
     pintarFondo();
     pintarStream();
@@ -679,6 +809,12 @@ async function vistaEditor(pid, miGeneracion) {
     cuadro = requestAnimationFrame(bucle);
   }
   function reproducir() {
+    if (escuchaFrase) {
+      if (!video.paused) return video.pause();
+      if (video.currentTime < escuchaFrase.inicio || video.currentTime >= escuchaFrase.fin - .05) video.currentTime = escuchaFrase.inicio;
+      video.play().catch(() => avisar("No se pudo reproducir la frase.", "error"));
+      return;
+    }
     if (!clip) return;
     if (video.paused) {
       if (video.currentTime < clip.inicio - 0.05 || video.currentTime >= clip.fin - 0.05) video.currentTime = clip.inicio;
@@ -764,6 +900,32 @@ async function vistaEditor(pid, miGeneracion) {
   });
 
   let entradaInicio = null, entradaFin = null, duracionClip = null;
+  function marcarDesdeCabezal(clave) {
+    const t = video.currentTime;
+    if (clave === "inicio") fijarRango(t, Math.max(clip.fin, t + 1), "fin");
+    else fijarRango(Math.min(clip.inicio, t - 1), t, "inicio");
+    calcularVentana();
+    pintarBarra();
+  }
+
+  function atajoEditor(e) {
+    if (!clip || operaciones || e.defaultPrevented || e.isComposing || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    if (e.target.closest("input, textarea, select, button, a, [role=button], [contenteditable]")) return;
+    const tecla = e.key.toLowerCase();
+    if (![" ", "arrowleft", "arrowright", "i", "o"].includes(tecla)) return;
+    e.preventDefault();
+    if (e.repeat && !tecla.startsWith("arrow")) return;
+    if (tecla === " ") reproducir();
+    else if (tecla === "i" || tecla === "o") marcarDesdeCabezal(tecla === "i" ? "inicio" : "fin");
+    else {
+      video.pause();
+      const direccion = tecla === "arrowright" ? 1 : -1;
+      const t = Math.max(clip.inicio, Math.min(clip.fin, video.currentTime + direccion));
+      const corte = corteEn(t);
+      video.currentTime = corte ? (direccion > 0 ? corte.fin : Math.max(clip.inicio, corte.inicio - 0.01)) : t;
+    }
+  }
+
   function pintarControles() {
     controles.replaceChildren();
     if (!clip) return;
@@ -786,17 +948,15 @@ async function vistaEditor(pid, miGeneracion) {
       if (clave === "inicio") fijarRango(clip.inicio + delta, clip.fin, "inicio"); else fijarRango(clip.inicio, clip.fin + delta, "fin");
       calcularVentana(); pintarBarra();
     } }, delta > 0 ? "+0,5" : "−0,5");
-    const aqui = (clave) => h("button", { class: "mini", onclick: () => {
-      const t = video.currentTime;
-      if (clave === "inicio") fijarRango(t, Math.max(clip.fin, t + 1), "fin"); else fijarRango(Math.min(clip.inicio, t - 1), t, "inicio");
-      calcularVentana(); pintarBarra();
-    } }, "Usar posición actual");
+    const aqui = (clave) => h("button", { class: "mini", onclick: () => marcarDesdeCabezal(clave) }, "Usar posición actual");
     controles.append(
-      h("div", { class: "fila" },
+      h("div", { class: "fila transporte" },
         h("button", { class: "primario", onclick: reproducir }, "Reproducir / pausar"),
         h("button", { onclick: () => { video.currentTime = clip.inicio; } }, "Ir al inicio"),
-        duracionClip, guardado),
-      barra,
+        velocidad, duracionClip, guardado),
+      h("details", { class: "atajos-editor" }, h("summary", {}, "Atajos de teclado"),
+        h("p", { class: "tenue pequeno" }, "Espacio: reproducir o pausar · ←/→: mover 1 s · I/O: fijar inicio o fin")),
+      h("div", { class: "linea-tiempo" }, h("h3", {}, "Línea de tiempo"), barra),
       h("div", { class: "tiempos" },
         h("div", {}, h("label", {}, "Inicio"), h("div", { class: "fila" }, entradaInicio, ajuste("inicio", -0.5), ajuste("inicio", 0.5)), h("div", { style: "margin-top:5px" }, aqui("inicio"))),
         h("div", {}, h("label", {}, "Fin"), h("div", { class: "fila" }, entradaFin, ajuste("fin", -0.5), ajuste("fin", 0.5)), h("div", { style: "margin-top:5px" }, aqui("fin")))));
@@ -804,6 +964,7 @@ async function vistaEditor(pid, miGeneracion) {
 
   // --- lista de clips ---
   function elegirClip(c) {
+    escuchaFrase = null;
     encolarPendiente();
     clip = c;
     video.pause();
@@ -834,6 +995,7 @@ async function vistaEditor(pid, miGeneracion) {
     });
   }
   function pintarDerecha() {
+    if (pestana !== "transcripcion" && escuchaFrase) { escuchaFrase = null; video.pause(); if (clip) video.currentTime = clip.inicio; }
     fuenteStream = null;
     const barraPestanas = h("div", { class: "pestanas", role: "tablist" }, PESTANAS.map(([id, texto]) =>
       h("button", { class: pestana === id ? "activa" : "", role: "tab", "aria-selected": String(pestana === id), onclick: () => { pestana = id; pintarDerecha(); } },
@@ -1073,13 +1235,27 @@ async function vistaEditor(pid, miGeneracion) {
         bloqueDividido,
         bloqueCredito,
         bloqueStream,
+        recorteVisible ? h("div", { class: "fila campo", role: "group", "aria-label": "Posiciones de encuadre fijo" },
+          ...[[0, "Izquierda"], [.5, "Centro"], [1, "Derecha"]].map(([posicion, texto]) =>
+            h("button", { class: "mini", onclick: () => {
+              guardar({ recorte_x: posicion });
+              ajustarVideo();
+              pintarDerecha();
+            } }, texto))) : null,
         recorteVisible ? rango("Posición horizontal del recorte (0 izquierda – 100 derecha)", "recorte_x", 0, 100, clip,
           (v) => { guardar({ recorte_x: v / 100 }); ajustarVideo(); }) : null,
-        recorteVisible ? h("div", { class: "campo" }, h("button", { onclick: async () => {
+        recorteVisible ? h("div", { class: "campo" }, h("button", { onclick: async (event) => {
+          const boton = event.currentTarget;
+          boton.textContent = "Analizando rostro…";
           const r = await operar("encuadre-auto", ["recorte_x", "encuadre", "trayectoria"]);
+          boton.textContent = "Seguir el rostro";
           if (!r) return;
           if (!r.detectado) return avisar("No se detectó un rostro con suficiente continuidad. Ajusta la posición a mano.");
-          ajustarVideo(); pintarDerecha(); avisar("Seguimiento del rostro activado.");
+          if (!vigente()) return;
+          ajustarVideo();
+          pintarDerecha();
+          const cobertura = r.cobertura == null ? "" : ` Rostro detectado en el ${Math.round(r.cobertura * 100)} % de las muestras.`;
+          avisar("Seguimiento del rostro activado." + cobertura);
         } }, "Seguir el rostro"),
         clip.trayectoria?.length ? h("button", { onclick: () => {
           guardar({ seguimiento: false }); ajustarVideo(); pintarDerecha();
@@ -1139,7 +1315,7 @@ async function vistaEditor(pid, miGeneracion) {
       h("button", { class: "frase" + (seleccion && i >= seleccion[0] && i <= seleccion[1] ? " elegida" : ""), onclick: (ev) => {
         if (ev.shiftKey && seleccion) seleccion = [Math.min(seleccion[0], i), Math.max(seleccion[0], i)];
         else seleccion = [i, i];
-        video.pause(); video.currentTime = f.inicio;
+        video.pause(); escuchaFrase = { inicio: f.inicio, fin: f.fin }; video.currentTime = f.inicio;
         const tope = panelDerecho.querySelector(".desplazable").scrollTop;
         pintarDerecha();
         panelDerecho.querySelector(".desplazable").scrollTop = tope;
@@ -1152,7 +1328,28 @@ async function vistaEditor(pid, miGeneracion) {
             [{ inicio: c.inicio, fin: f.inicio }, { inicio: f.fin, fin: c.fin }]).filter((c) => c.fin > c.inicio));
         } else cambiarCortes([...cortesDel(), { inicio: f.inicio, fin: f.fin }]);
       } }, estaCortado(f) ? "Restaurar" : "Quitar") : null));
-    return h("div", {}, h("div", { class: "fila", style: "margin-bottom:10px" }, crear, info), h("div", { class: "desplazable" }, filas));
+    const buscar = h("input", { type: "search", value: busquedaTranscripcion, placeholder: "Buscar en la transcripción", "aria-label": "Buscar en la transcripción" });
+    const contador = h("span", { class: "tenue pequeno", role: "status" });
+    const normalizar = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase();
+    function filtrar() {
+      busquedaTranscripcion = buscar.value;
+      const consulta = normalizar(busquedaTranscripcion.trim());
+      let visibles = 0;
+      filas.forEach((fila, i) => { fila.hidden = !normalizar(transcripcion.frases[i].texto).includes(consulta); if (!fila.hidden) visibles++; });
+      contador.textContent = `${visibles} de ${filas.length} frases`;
+    }
+    buscar.addEventListener("input", filtrar);
+    filtrar();
+    const escuchar = h("button", { disabled: !seleccion, onclick: () => {
+      const [a, b] = seleccion;
+      video.pause();
+      escuchaFrase = { inicio: transcripcion.frases[a].inicio, fin: transcripcion.frases[b].fin };
+      video.currentTime = escuchaFrase.inicio;
+      reproducir();
+    } }, "Escuchar selección");
+    const volver = h("button", { disabled: !clip, onclick: () => { escuchaFrase = null; video.pause(); video.currentTime = clip.inicio; } }, "Volver al clip");
+    return h("div", {}, h("div", { class: "fila", style: "margin-bottom:10px" }, buscar, contador),
+      h("div", { class: "fila", style: "margin-bottom:10px" }, crear, escuchar, volver, info), h("div", { class: "desplazable" }, filas));
   }
 
   function panelTikTok() {
@@ -1223,6 +1420,24 @@ async function vistaEditor(pid, miGeneracion) {
       exportar.disabled = false;
       if (e) { proyecto.exportaciones.unshift(e); pintarDerecha(); }
     } }, "Exportar este clip a MP4");
+    const descargarSrt = h("button", { disabled: !clip, onclick: async () => {
+      const id = clip.id;
+      descargarSrt.disabled = true;
+      try {
+        if (!(await vaciar())) return avisar(AVISO_GUARDADO, "error");
+        if (!vigente()) return;
+        const enlace = h("a", { href: `/api/clips/${id}/subtitulos.srt`, download: "" });
+        const respuesta = await fetch(enlace.href);
+        if (!respuesta.ok) throw new Error(mensajeError(await respuesta.json().catch(() => null), respuesta.status));
+        const nombre = respuesta.headers.get("Content-Disposition")?.split("UTF-8''")[1];
+        enlace.download = nombre ? decodeURIComponent(nombre) : "subtitulos.srt";
+        const url = URL.createObjectURL(await respuesta.blob());
+        enlace.href = url;
+        enlace.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) { avisar(e.message, "error"); }
+      finally { descargarSrt.disabled = false; }
+    } }, "Descargar subtítulos SRT");
     const todos = h("button", { disabled: !proyecto.clips.length, onclick: async () => {
       const n = proyecto.clips.length;
       if (!confirm(`Se exportarán los ${n} clips del proyecto, uno tras otro. ¿Continuar?`)) return;
@@ -1250,7 +1465,7 @@ async function vistaEditor(pid, miGeneracion) {
           } }, "Eliminar") : null));
     });
     return h("div", {},
-      h("div", { class: "fila", style: "margin-bottom:6px" }, exportar, todos,
+      h("div", { class: "fila", style: "margin-bottom:6px" }, exportar, descargarSrt, todos,
         h("button", { onclick: () => intentar(() => api("POST", `/proyectos/${pid}/abrir-carpeta`)) }, "Abrir carpeta")),
       h("p", { class: "tenue pequeno" }, "Salida: 1080×1920, H.264 + AAC, con los subtítulos incrustados." +
         (proyecto.exportaciones.length ? ` ${listas} lista(s)` + (enCurso ? `, ${enCurso} en curso o en cola.` : ".") : "")),
@@ -1261,6 +1476,7 @@ async function vistaEditor(pid, miGeneracion) {
     pintarClips(); pintarControles(); pintarDerecha(); ajustarVideo();
     titulo.value = clip ? clip.titulo : "";
     titulo.disabled = !clip;
+    duplicar.disabled = !clip || operaciones > 0;
   }
 
   // --- sondeo de exportaciones ---
@@ -1292,7 +1508,19 @@ async function vistaEditor(pid, miGeneracion) {
     const inicio = Math.min(video.currentTime, Math.max(0, proyecto.duracion - 1));
     const nuevo = await intentar(() => api("POST", `/proyectos/${pid}/clips`, { inicio, fin: Math.min(proyecto.duracion, inicio + 30), titulo: "" }));
     if (nuevo) { proyecto.clips.push(nuevo); proyecto.clips.sort((a, b) => a.inicio - b.inicio); elegirClip(nuevo); }
-  } }, "Nuevo clip (30 s desde la posición actual)");
+  }, title: "Crea un clip de hasta 30 segundos desde la posición actual" }, "+ Nuevo clip");
+  const duplicar = h("button", { disabled: !clip, onclick: async () => {
+    const original = clip.id;
+    duplicar.disabled = true;
+    const copia = await operar("duplicar", []);
+    duplicar.disabled = !clip;
+    if (!copia || !vigente()) return;
+    proyecto.clips.push(copia);
+    proyecto.clips.sort((a, b) => a.inicio - b.inicio);
+    if (clip?.id === original) elegirClip(copia);
+    else pintarClips();
+    avisar("Clip duplicado.");
+  } }, "Duplicar clip");
   const borrarClip = h("button", { class: "peligro", onclick: async () => {
     if (!clip || !confirm(`¿Eliminar el clip «${clip.titulo}»?`)) return;
     const id = clip.id;
@@ -1334,7 +1562,7 @@ async function vistaEditor(pid, miGeneracion) {
     h("div", { class: "editor" },
       h("section", { class: "panel panel-clips" }, h("h2", {}, "Clips"), listaClips,
         h("div", { class: "herramientas" },
-          h("div", { class: "botones-columna" }, nuevoClip, borrarClip),
+          h("div", { class: "botones-columna" }, nuevoClip, duplicar, borrarClip),
           h("div", { class: "grupo" },
             h("h3", {}, "Proponer clips"),
             h("div", { class: "fila pequeno" }, "Entre", minS, "y", maxS, "s", proponer),
@@ -1343,11 +1571,16 @@ async function vistaEditor(pid, miGeneracion) {
             h("h3", {}, "Dividir el video completo"),
             h("div", { class: "fila pequeno" }, "Partes de", parteS, "s", dividir),
             h("label", { class: "fila pequeno", style: "margin:6px 0 0" }, enPausas, "Mover cada corte a la pausa más cercana para no partir frases")))),
-      h("section", { class: "centro" }, h("div", { class: "fila", style: "width:100%;max-width:560px" }, h("label", { style: "margin:0" }, "Título"), titulo), telefono, controles),
-      h("section", { class: "panel" }, panelDerecho)));
+      h("section", { class: "centro panel", "aria-label": "Vista previa del clip" },
+        h("div", { class: "monitor-cabecera" }, tituloPrevio, h("div", { class: "fila" }, mostrarGuia, h("span", { class: "etiqueta" }, "9:16"))),
+        h("div", { class: "monitor" }, telefono),
+        h("label", { class: "titulo-clip" }, "Título del clip", titulo),
+        controles),
+      h("section", { class: "panel inspector", "aria-label": "Ajustes del clip" }, panelDerecho)));
 
   video.addEventListener("loadedmetadata", () => { if (clip) video.currentTime = clip.inicio; ajustarVideo(); });
   pintarTodo();
+  document.addEventListener("keydown", atajoEditor);
   cuadro = requestAnimationFrame(bucle);
   temporizador = setInterval(sondear, 1500);
   limpiarVista = () => {
@@ -1355,6 +1588,7 @@ async function vistaEditor(pid, miGeneracion) {
     cancelado = true;
     cancelAnimationFrame(cuadro);
     window.removeEventListener("resize", alRedimensionar);
+    document.removeEventListener("keydown", atajoEditor);
     video.pause();
     video.removeAttribute("src");
     video.load();

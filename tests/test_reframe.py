@@ -60,11 +60,12 @@ def test_deteccion_sigue_movimiento_y_conserva_posicion_si_se_pierde(monkeypatch
             # El segundo rostro cambia de tamano, pero no debe robar el seguimiento.
             return [(80 + i * 12, 60, 60, 60), (560, 60, 65 + i % 2 * 10, 65)]
 
+    monkeypatch.setattr(reframe, "_crear_yunet", lambda _: None)
     captura = Captura()
     monkeypatch.setattr(cv2, "VideoCapture", lambda _: captura)
     monkeypatch.setattr(cv2, "CascadeClassifier", Clasificador)
     # Elige inicialmente el segundo rostro, que es mayor, y conserva esa identidad.
-    resultado = reframe.detectar_seguimiento(Path("prueba.mp4"), 10, 22)
+    resultado = reframe.detectar_seguimiento(Path("prueba.mp4"), 10, 16)
     assert resultado is not None
     assert all(p["centro_x"] > .85 for p in resultado["trayectoria"])
     assert captura.liberada
@@ -76,16 +77,16 @@ def test_deteccion_sigue_movimiento_y_conserva_posicion_si_se_pierde(monkeypatch
         return original(self, *args, **kwargs)[:1]
 
     monkeypatch.setattr(Clasificador, "detectMultiScale", una_persona)
-    resultado = reframe.detectar_seguimiento(Path("prueba.mp4"), 10, 22)
+    resultado = reframe.detectar_seguimiento(Path("prueba.mp4"), 10, 16)
     puntos = resultado["trayectoria"]
     assert puntos[-1]["centro_x"] - puntos[0]["centro_x"] > .35
     assert len(puntos) == 24
     assert puntos[10]["centro_x"] == puntos[11]["centro_x"]
     Clasificador.perdida = range(10, 18)
-    puntos = reframe.detectar_seguimiento(Path("prueba.mp4"), 10, 22)["trayectoria"]
-    assert puntos[16]["centro_x"] == .5
+    puntos = reframe.detectar_seguimiento(Path("prueba.mp4"), 10, 16)["trayectoria"]
+    assert abs(puntos[17]["centro_x"] - .5) < abs(puntos[10]["centro_x"] - .5)
     Clasificador.perdida = range(0, 23)
-    assert reframe.detectar_seguimiento(Path("prueba.mp4"), 10, 22) is None
+    assert reframe.detectar_seguimiento(Path("prueba.mp4"), 10, 16) is None
 
 
 @pytest.mark.parametrize("encuadre", ["rellenar", "dividido"])
@@ -118,3 +119,62 @@ def test_exportacion_real_con_120_puntos_no_agota_el_analizador(tmp_path):
     info = media.sondear(destino)
     assert (info["ancho"], info["alto"]) == (1080, 1920)
     assert info["duracion"] == pytest.approx(1, abs=.05)
+
+
+def test_yunet_local_procesa_un_fotograma():
+    detector = reframe._crear_yunet(cv2)
+    assert detector is not None
+    assert reframe._rostros_yunet(detector, np.zeros((160, 320, 3), dtype=np.uint8)) == []
+
+
+def test_asociacion_rechaza_rostro_lejano_o_en_otra_altura():
+    anterior = (.2, .2, .08, .12)
+    cercano = (.24, .21, .08, .12)
+    intruso = (.2, .65, .15, .18)
+    assert reframe._elegir_rostro([intruso, cercano], anterior, .25) == cercano
+    assert reframe._elegir_rostro([intruso], anterior, .25) is None
+    assert reframe._elegir_rostro([intruso, cercano], None, 0) == intruso
+
+
+def test_seguimiento_no_arranca_con_una_deteccion_aislada(monkeypatch):
+    class Captura:
+        def isOpened(self):
+            return True
+
+        def set(self, *args):
+            pass
+
+        def read(self):
+            return True, np.zeros((160, 320, 3), dtype=np.uint8)
+
+        def release(self):
+            pass
+
+    detecciones = iter([[(280, 30, 32, 32)], [], *([[(48, 30, 24, 28)]] * 22)])
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _: Captura())
+    monkeypatch.setattr(reframe, "_crear_yunet", lambda _: object())
+    monkeypatch.setattr(reframe, "_rostros_yunet", lambda *_: next(detecciones))
+    resultado = reframe.detectar_seguimiento(Path("prueba.mp4"), 0, 6)
+    assert resultado is not None
+    assert resultado["cobertura"] == .88
+    assert all(p["centro_x"] < .25 for p in resultado["trayectoria"])
+
+
+def test_confirma_la_misma_persona_aunque_alterne_el_rostro_mayor(monkeypatch):
+    class Captura:
+        def isOpened(self): return True
+        def set(self, *args): pass
+        def read(self): return True, np.zeros((360, 640, 3), dtype=np.uint8)
+        def release(self): pass
+
+    detecciones = iter([
+        [(80, 60, 70 if i % 2 == 0 else 65, 70),
+         (480, 60, 65 if i % 2 == 0 else 70, 70)] for i in range(24)
+    ])
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _: Captura())
+    monkeypatch.setattr(reframe, "_crear_yunet", lambda _: object())
+    monkeypatch.setattr(reframe, "_rostros_yunet", lambda *_: next(detecciones))
+    resultado = reframe.detectar_seguimiento(Path("dos-personas.mp4"), 0, 6)
+    assert resultado is not None
+    assert resultado["cobertura"] > .9
+    assert all(p["centro_x"] < .25 for p in resultado["trayectoria"])

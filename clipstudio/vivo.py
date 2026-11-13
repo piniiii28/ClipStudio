@@ -197,6 +197,8 @@ def plan_recorte(segmentos: list[Seg], a: float, b: float) -> tuple[list[Seg], f
     cubiertos = segmentos_que_cubren(segmentos, a, b)
     if not cubiertos:
         raise ErrorMedia("Ese tramo ya no está en el búfer o todavía no se ha grabado.")
+    if any(siguiente.inicio - previo.fin > .1 for previo, siguiente in zip(cubiertos, cubiertos[1:])):
+        raise ErrorMedia("Falta vídeo en ese tramo del búfer. Elige un momento posterior a la interrupción.")
     a = max(a, cubiertos[0].inicio)
     b = min(b, cubiertos[-1].fin)
     if b - a < MIN_CLIP_S:
@@ -451,7 +453,7 @@ class Sesion:
             momento_chat["tiempo"] = max(0, momento_chat["tiempo"] - self.desfase_chat_s)
             self._registrar_momento(momento_chat, "chat")
 
-    def _registrar_momento(self, momento: dict, origen: str) -> None:
+    def _registrar_momento(self, momento: dict, origen: str) -> dict | None:
         automatico = origen == "chat" and self.automaticos
         estado = "esperando_video" if automatico else "nuevo"
         try:
@@ -462,7 +464,7 @@ class Sesion:
             )
         except Exception:
             log.error("No se pudo guardar el momento", exc_info=True)
-            return
+            return None
         with self.lock:
             self.momentos.append({
                 "id": fila["id"], "tiempo": momento["tiempo"], "motivo": momento["motivo"],
@@ -473,6 +475,18 @@ class Sesion:
                 self._clips_pendientes.put_nowait(fila["id"])
             except queue.Full:
                 self._estado_momento(fila["id"], estado="error", error="La cola automática está llena. Puedes crear este clip manualmente.")
+
+        return dict(fila)
+
+    def marcar_momento(self, nota: str) -> dict:
+        with self.lock:
+            if self.estado != "grabando" or not self.segmentos:
+                raise ErrorMedia("Espera a que haya vídeo grabado para marcar un momento.")
+            tiempo = max(s.fin for s in self.segmentos)
+            fila = self._registrar_momento({"tiempo": tiempo, "motivo": nota.strip() or "Marcador manual"}, "manual")
+            if fila is None:
+                raise ErrorMedia("No se pudo guardar el momento. Inténtalo de nuevo.")
+            return fila
 
     def _estado_chat(self, estado: str, error: str | None) -> None:
         with self.lock:
@@ -548,6 +562,8 @@ class Sesion:
                     proyecto = db.obtener("proyectos", momento["proyecto_id"])
                     if proyecto:
                         return proyecto
+                if momento["tiempo"] < min((seg.inicio for seg in self.segmentos), default=0.0):
+                    raise ErrorMedia("Ese momento ya está fuera del búfer.")
                 a, b = max(0.0, momento["tiempo"] - ANTES_S), momento["tiempo"] + DESPUES_S
             self.esperar_cobertura(b, ESPERA_POSTERIOR_S)
             if self.parar.is_set():
@@ -698,7 +714,10 @@ class Sesion:
                 "buffer_min": config.VIVO_BUFER_MIN,
                 "estimado_buffer_gb": estimado,
                 "volumen": self.db[-VOLUMEN_MOSTRADO_S:],
-                "momentos": [dict(m) for m in self.momentos],
+                "buffer_inicio_s": min((s.inicio for s in self.segmentos), default=0.0),
+                "momentos": [{**m, "caducado": not m.get("proyecto_id") and
+                              m["tiempo"] < min((s.inicio for s in self.segmentos), default=0.0)}
+                             for m in self.momentos],
                 "pid": self.proc.pid if self.proc else None,
                 "chat_estado": self.estado_chat,
                 "chat_error": self.error_chat,
@@ -919,6 +938,18 @@ def cambiar_encuadre(sid: str, datos: EncuadreVivo) -> dict:
     with s.lock:
         s.composicion = composicion
     return s.publico()
+
+
+class MarcadorVivo(BaseModel):
+    nota: str = Field("", max_length=160)
+
+
+@router.post("/{sid}/momentos", status_code=201)
+def marcar_momento(sid: str, datos: MarcadorVivo) -> dict:
+    try:
+        return _sesion_por_id(sid).marcar_momento(datos.nota)
+    except ErrorMedia as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/{sid}/clip", status_code=201)

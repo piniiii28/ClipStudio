@@ -349,7 +349,9 @@ def procesar_proyecto(proyecto_id: str, cancel: Cancelacion) -> None:
         if not es_url:
             raise ErrorMedia("No se encontro el archivo subido. Vuelve a crear el proyecto.")
         _paso(proyecto_id, "descarga", "Descargando el video...", 1)
-        fuente, titulo = importer.descargar(proyecto["url"], carpeta, cancel, prog.tramo(1, base))
+        fuente, titulo = importer.descargar(
+            proyecto["url"], carpeta, cancel, prog.tramo(1, base), proyecto.get("audio_idioma")
+        )
         cambios = {"archivo_fuente": fuente.name}
         if proyecto["nombre"] == proyecto["url"]:
             cambios["nombre"] = titulo

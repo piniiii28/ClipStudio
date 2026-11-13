@@ -1,4 +1,4 @@
-"""Seguimiento horizontal de rostros con detectores locales de frente y perfil.
+"""Seguimiento horizontal de rostros con YuNet y respaldo Haar de frente y perfil.
 
 Suaviza una trayectoria compartida por la vista previa y la exportacion. Con varias
 personas prioriza la continuidad espacial. No identifica al hablante por el audio.
@@ -10,6 +10,7 @@ import math
 import statistics
 from pathlib import Path
 
+MODELO_ROSTROS = Path(__file__).parent / "modelos" / "face_detection_yunet_2023mar.onnx"
 MUESTRAS = 24
 MIN_PROPORCION = 0.3
 
@@ -47,7 +48,7 @@ def normalizar_composicion(datos: dict | None) -> dict:
 
 def detectar_camara(video: Path, inicio: float, fin: float) -> dict | None:
     """Busca una cara persistente con YuNet y estima una zona con cabeza y hombros."""
-    modelo = Path(__file__).parent / "modelos" / "face_detection_yunet_2023mar.onnx"
+    modelo = MODELO_ROSTROS
     if modelo.is_file() and math.isfinite(inicio) and math.isfinite(fin) and fin > inicio:
         import cv2
 
@@ -145,35 +146,73 @@ def detectar_recorte(video: Path, inicio: float, fin: float) -> float | None:
     return resultado["recorte_x"] if resultado else None
 
 
-def detectar_seguimiento(video: Path, inicio: float, fin: float) -> dict | None:
-    """Muestrea hasta 120 fotogramas y sigue el rostro mas cercano al anterior.
+def _crear_yunet(cv2):
+    if not MODELO_ROSTROS.is_file():
+        return None
+    try:
+        return cv2.FaceDetectorYN.create(str(MODELO_ROSTROS), "", (640, 360), .72, .3, 1000)
+    except (AttributeError, cv2.error, OSError):
+        return None
 
-    Los tiempos son absolutos respecto del video fuente. Mantiene la posicion durante
-    perdidas breves y vuelve al centro tras 1,5 s. Prioriza la continuidad entre rostros.
-    """
+
+def _rostros_yunet(detector, cuadro):
+    alto, ancho = cuadro.shape[:2]
+    detector.setInputSize((ancho, alto))
+    _, rostros = detector.detect(cuadro)
+    return [tuple(float(v) for v in r[:4]) for r in rostros if min(r[2:4]) >= 12] if rostros is not None else []
+
+
+def _centro(caja):
+    x, y, ancho, alto = caja
+    return x + ancho / 2, y + alto / 2
+
+
+def _elegir_rostro(candidatos, anterior, intervalo):
+    if not candidatos:
+        return None
+    if anterior is None:
+        return max(candidatos, key=lambda r: r[2] * r[3])
+
+    cx, cy = _centro(anterior)
+    escala = anterior[2] * anterior[3]
+    # La tolerancia crece con el tiempo entre detecciones y con el tamaño de la cara.
+    limite_x = max(.08, anterior[2]) + min(.16, intervalo * .10)
+    limite_y = max(.08, anterior[3]) + min(.12, intervalo * .08)
+    compatibles = []
+    for caja in candidatos:
+        x, y = _centro(caja)
+        proporcion = caja[2] * caja[3] / escala
+        distancia = math.hypot((x - cx) / limite_x, (y - cy) / limite_y)
+        if distancia <= 1 and .3 <= proporcion <= 3.3:
+            compatibles.append((distancia + .25 * abs(math.log(proporcion)), caja))
+    return min(compatibles, key=lambda par: par[0])[1] if compatibles else None
+
+
+def detectar_seguimiento(video: Path, inicio: float, fin: float) -> dict | None:
+    """Genera una trayectoria horizontal en tiempo fuente usando YuNet y respaldo Haar."""
     if not math.isfinite(inicio) or not math.isfinite(fin) or fin <= inicio:
         return None
     try:
         import cv2
-    except Exception:
+    except ImportError:
         return None
     cap = cv2.VideoCapture(str(video))
     try:
         if not cap.isOpened():
             return None
-        clasificador = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        if clasificador.empty():
-            return None
-        perfil = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+        detector = _crear_yunet(cv2)
+        frontal = perfil = None
         muestras = []
         anterior = None
+        por_confirmar = None
         ultimo_rostro = inicio
-        detecciones = 0
         caras = []
-        ancho = alto = 0
-        total = 0
-        cantidad = max(MUESTRAS, min(120, math.ceil((fin - inicio) * 2)))
+        ancho = alto = total = 0
+        cantidad = max(MUESTRAS, min(120, math.ceil((fin - inicio) * 4)))
         paso = (fin - inicio) / cantidad
+        # En clips largos el muestreo es más espaciado: un fotograma perdido no
+        # debe bastar para abandonar el rostro.
+        retencion = max(1.5, paso * 2.5)
         for i in range(cantidad):
             tiempo = inicio + paso * (i + 0.5)
             cap.set(cv2.CAP_PROP_POS_MSEC, tiempo * 1000)
@@ -182,43 +221,65 @@ def detectar_seguimiento(video: Path, inicio: float, fin: float) -> dict | None:
                 continue
             total += 1
             alto, ancho = cuadro.shape[:2]
-            # Limita el coste de deteccion incluso si el proxy es de alta resolucion.
-            escala = min(1.0, 640 / ancho)
-            cuadro = cv2.resize(cuadro, (round(ancho * escala), round(alto * escala)))
-            gris = cv2.equalizeHist(cv2.cvtColor(cuadro, cv2.COLOR_BGR2GRAY))
-            lado_min = max(20, int(gris.shape[0] * 0.06))
-            rostros = clasificador.detectMultiScale(gris, scaleFactor=1.1, minNeighbors=6, minSize=(lado_min, lado_min))
-            if not len(rostros) and not perfil.empty():
-                rostros = list(perfil.detectMultiScale(gris, scaleFactor=1.1, minNeighbors=5, minSize=(lado_min, lado_min)))
-                invertidos = perfil.detectMultiScale(cv2.flip(gris, 1), scaleFactor=1.1, minNeighbors=5, minSize=(lado_min, lado_min))
-                rostros.extend((gris.shape[1] - x - w, y, w, h) for x, y, w, h in invertidos)
-            if len(rostros):
-                mayor = max(r[2] * r[3] for r in rostros)
-                candidatos = [r for r in rostros if r[2] * r[3] >= mayor * 0.4]
-                if anterior is None:
-                    rostro = max(candidatos, key=lambda r: r[2] * r[3])
-                else:
-                    rostro = min(candidatos, key=lambda r: abs((r[0] + r[2] / 2) / gris.shape[1] - anterior))
-                x, _, w, _ = rostro
-                rx, ry, rw, rh = rostro
-                caras.append((float(rx / gris.shape[1]), float(ry / gris.shape[0]),
-                              float(rw / gris.shape[1]), float(rh / gris.shape[0])))
-                anterior = (x + w / 2) / gris.shape[1]
-                ultimo_rostro = tiempo
-                detecciones += 1
-            elif tiempo - ultimo_rostro > 1.5:
+            escala = min(1.0, 640 / max(ancho, alto))
+            if escala < 1:
+                cuadro = cv2.resize(cuadro, (max(1, round(ancho * escala)), max(1, round(alto * escala))))
+            h, w = cuadro.shape[:2]
+            rostros = []
+            if detector is not None:
+                try:
+                    rostros = _rostros_yunet(detector, cuadro)
+                except cv2.error:
+                    detector = None
+            if detector is None:
+                if frontal is None:
+                    frontal = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+                    perfil = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+                gris = cv2.equalizeHist(cv2.cvtColor(cuadro, cv2.COLOR_BGR2GRAY))
+                lado_min = max(16, int(min(h, w) * .045))
+                opciones = dict(scaleFactor=1.1, minNeighbors=5, minSize=(lado_min, lado_min))
+                rostros = frontal.detectMultiScale(gris, **opciones) if not frontal.empty() else []
+                if not len(rostros) and not perfil.empty():
+                    rostros = list(perfil.detectMultiScale(gris, **opciones))
+                    rostros.extend((w - x - rw, y, rw, rh) for x, y, rw, rh in
+                                   perfil.detectMultiScale(cv2.flip(gris, 1), **opciones))
+            candidatos = [(float(x / w), float(y / h), float(rw / w), float(rh / h))
+                          for x, y, rw, rh in rostros if rw > 0 and rh > 0]
+            intervalo = tiempo - ultimo_rostro
+            if intervalo > retencion:
                 anterior = None
+            # Mantener también la identidad candidata durante la confirmación:
+            # dos personas de tamaño parecido no deben reiniciar la selección.
+            rostro = _elegir_rostro(candidatos, anterior or por_confirmar, intervalo if anterior else paso)
+            if rostro is None and anterior is None:
+                por_confirmar = None
+                rostro = _elegir_rostro(candidatos, None, intervalo)
+            if rostro is not None and anterior is None:
+                # Dos detecciones compatibles evitan arrancar o cambiar de persona
+                # por una cara que aparece un solo fotograma.
+                confirmado = por_confirmar is not None and _elegir_rostro([rostro], por_confirmar, paso) is not None
+                por_confirmar = None if confirmado else rostro
+                if not confirmado:
+                    rostro = None
+            elif rostro is None:
+                por_confirmar = None
+            if rostro is not None:
+                anterior = rostro
+                ultimo_rostro = tiempo
+                caras.append(rostro)
             if anterior is not None or muestras:
-                muestras.append({"tiempo": tiempo, "centro_x": anterior if anterior is not None else 0.5})
-        if total == 0 or detecciones < max(2, total * MIN_PROPORCION):
+                centro = _centro(anterior)[0] if anterior is not None else .5
+                muestras.append({"tiempo": tiempo, "centro_x": max(0., min(1., centro))})
+        if len(caras) < max(2, total * MIN_PROPORCION):
             return None
+        if muestras[0]["tiempo"] > inicio + paso / 2:
+            muestras.insert(0, {"tiempo": inicio + paso / 2, "centro_x": muestras[0]["centro_x"]})
         trayectoria = suavizar_trayectoria(muestras)
         centro = statistics.median(p["centro_x"] for p in trayectoria)
-        # Incluye margen lateral, cabeza y hombros; la region se puede corregir a mano.
-        camara = _region_camara(caras)
         return {"recorte_x": round(recorte_desde_centro(centro, ancho, alto), 3),
-                "trayectoria": trayectoria, "camara": camara}
-    except Exception:
+                "trayectoria": trayectoria, "camara": _region_camara(caras),
+                "cobertura": round(len(caras) / total, 2)}
+    except (cv2.error, OSError):
         return None
     finally:
         cap.release()
