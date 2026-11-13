@@ -365,3 +365,15 @@ Consulta `docs/estado.md` para lo verificado, las limitaciones y lo pendiente.
 
 Importa solo videos propios o que tengas permiso para reutilizar. Descargar o republicar contenido
 ajeno puede infringir derechos de autor y las condiciones de la plataforma de origen.
+
+### YouTube: tendencias y pistas de audio
+
+Para habilitar **YouTube → Tendencias**, activa YouTube Data API v3 en tu proyecto de
+Google Cloud, crea una clave restringida a esa API y ponla en `.env` como
+`CLIPSTUDIO_YOUTUBE_API_KEY`. Reinicia ClipStudio. La clave se usa en el servidor
+local. El listado se obtiene de `videos.list` con `chart=mostPopular` para el país elegido.
+
+En **Proyectos → Enlace de video**, pega una URL de YouTube y usa **Buscar pistas de audio**.
+Si yt-dlp encuentra pistas con idioma, puedes elegir cuál descargar antes de importar.
+Esto usa los doblajes disponibles en el video. El selector **Idioma para transcribir**
+controla el reconocimiento de voz y se puede dejar en detección automática.
