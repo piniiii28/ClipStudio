@@ -42,7 +42,7 @@ export function vistaVivo(ctx) {
     botonConectar.disabled = false;
     if (s) { url.value = ""; sesion = s; pintar(); avisar("Conectando con el directo…"); }
   } }, url, botonConectar);
-  const panelConectar = h("section", { class: "panel" },
+  const panelConectar = h("section", { class: "panel conectar-vivo" },
     h("h2", {}, "Conectar con un directo"), formulario,
     h("div", { class: "fila", style: "margin-top:12px" },
       h("label", {}, usarChat, " Leer chat (Twitch / YouTube / Kick)"),
@@ -85,30 +85,30 @@ export function vistaVivo(ctx) {
   const selector = crearSelectorStream({ h, fuente: imagen, textoAutomatico: "Detectar cámara en los clips",
     alCambiar: () => { cambiosEncuadre = true; aplicarEncuadre.disabled = false; estadoEncuadre.textContent = "Cambios sin aplicar."; } });
 
-  const panelVivo = h("div", { hidden: true },
+  const panelVivo = h("div", { class: "cuadricula-vivo", hidden: true },
     h("section", { class: "panel" },
       h("div", { class: "fila" }, etiqueta, tiempo, titulo, h("span", { class: "crece" }), botonParar),
       bufer, mensaje,
       h("h3", { style: "margin-top:14px" }, "Volumen (últimos 2 minutos)"), lienzo,
       h("div", { class: "fila", style: "margin-top:14px" }, botonesUltimos),
       enlaceClip),
-    h("section", { class: "panel", style: "margin-top:16px" },
+    h("section", { class: "panel" },
       h("h2", {}, "Vista del directo y encuadre"),
       h("p", { class: "tenue pequeno" }, "La imagen se actualiza con los segmentos grabados y lleva unos segundos de retraso."),
       esperaImagen, selector.elemento,
       h("div", { class: "fila", style: "margin-top:12px" }, aplicarEncuadre, estadoEncuadre)),
-    h("section", { class: "panel", style: "margin-top:16px" },
+    h("section", { class: "panel" },
       h("h2", {}, "Momentos detectados"),
       h("p", { class: "tenue pequeno" }, "Se marcan subidas de volumen y aumentos de actividad del chat respecto al minuto anterior."),
       listaMomentos),
-    h("section", { class: "panel", style: "margin-top:16px" },
+    h("section", { class: "panel" },
       h("h3", {}, "Señales del chat"),
       estadoChat, errorChat, actividadChat));
 
   vista.append(
-    h("div", { class: "portada" },
+    h("header", { class: "portada portada-vivo" },
       h("h1", {}, "En vivo"),
-      h("p", { class: "tenue" }, "Graba un directo mientras ocurre y saca clips al instante. Los clips aparecen en Proyectos y se editan como cualquier otro.")),
+      h("p", { class: "tenue" }, "Graba un directo, sigue la actividad del chat y envía los mejores momentos a Proyectos.")),
     panelConectar, panelVivo);
 
   async function crearClip(cuerpo, descripcion) {
