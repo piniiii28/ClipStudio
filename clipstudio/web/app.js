@@ -788,6 +788,32 @@ async function vistaEditor(pid, miGeneracion) {
   });
 
   let entradaInicio = null, entradaFin = null, duracionClip = null;
+  function marcarDesdeCabezal(clave) {
+    const t = video.currentTime;
+    if (clave === "inicio") fijarRango(t, Math.max(clip.fin, t + 1), "fin");
+    else fijarRango(Math.min(clip.inicio, t - 1), t, "inicio");
+    calcularVentana();
+    pintarBarra();
+  }
+
+  function atajoEditor(e) {
+    if (!clip || operaciones || e.defaultPrevented || e.isComposing || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    if (e.target.closest("input, textarea, select, button, a, [role=button], [contenteditable]")) return;
+    const tecla = e.key.toLowerCase();
+    if (![" ", "arrowleft", "arrowright", "i", "o"].includes(tecla)) return;
+    e.preventDefault();
+    if (e.repeat && !tecla.startsWith("arrow")) return;
+    if (tecla === " ") reproducir();
+    else if (tecla === "i" || tecla === "o") marcarDesdeCabezal(tecla === "i" ? "inicio" : "fin");
+    else {
+      video.pause();
+      const direccion = tecla === "arrowright" ? 1 : -1;
+      const t = Math.max(clip.inicio, Math.min(clip.fin, video.currentTime + direccion));
+      const corte = corteEn(t);
+      video.currentTime = corte ? (direccion > 0 ? corte.fin : Math.max(clip.inicio, corte.inicio - 0.01)) : t;
+    }
+  }
+
   function pintarControles() {
     controles.replaceChildren();
     if (!clip) return;
@@ -810,16 +836,14 @@ async function vistaEditor(pid, miGeneracion) {
       if (clave === "inicio") fijarRango(clip.inicio + delta, clip.fin, "inicio"); else fijarRango(clip.inicio, clip.fin + delta, "fin");
       calcularVentana(); pintarBarra();
     } }, delta > 0 ? "+0,5" : "−0,5");
-    const aqui = (clave) => h("button", { class: "mini", onclick: () => {
-      const t = video.currentTime;
-      if (clave === "inicio") fijarRango(t, Math.max(clip.fin, t + 1), "fin"); else fijarRango(Math.min(clip.inicio, t - 1), t, "inicio");
-      calcularVentana(); pintarBarra();
-    } }, "Usar posición actual");
+    const aqui = (clave) => h("button", { class: "mini", onclick: () => marcarDesdeCabezal(clave) }, "Usar posición actual");
     controles.append(
       h("div", { class: "fila transporte" },
         h("button", { class: "primario", onclick: reproducir }, "Reproducir / pausar"),
         h("button", { onclick: () => { video.currentTime = clip.inicio; } }, "Ir al inicio"),
         duracionClip, guardado),
+      h("details", { class: "atajos-editor" }, h("summary", {}, "Atajos de teclado"),
+        h("p", { class: "tenue pequeno" }, "Espacio: reproducir o pausar · ←/→: mover 1 s · I/O: fijar inicio o fin")),
       h("div", { class: "linea-tiempo" }, h("h3", {}, "Línea de tiempo"), barra),
       h("div", { class: "tiempos" },
         h("div", {}, h("label", {}, "Inicio"), h("div", { class: "fila" }, entradaInicio, ajuste("inicio", -0.5), ajuste("inicio", 0.5)), h("div", { style: "margin-top:5px" }, aqui("inicio"))),
@@ -1247,6 +1271,24 @@ async function vistaEditor(pid, miGeneracion) {
       exportar.disabled = false;
       if (e) { proyecto.exportaciones.unshift(e); pintarDerecha(); }
     } }, "Exportar este clip a MP4");
+    const descargarSrt = h("button", { disabled: !clip, onclick: async () => {
+      const id = clip.id;
+      descargarSrt.disabled = true;
+      try {
+        if (!(await vaciar())) return avisar(AVISO_GUARDADO, "error");
+        if (!vigente()) return;
+        const enlace = h("a", { href: `/api/clips/${id}/subtitulos.srt`, download: "" });
+        const respuesta = await fetch(enlace.href);
+        if (!respuesta.ok) throw new Error(mensajeError(await respuesta.json().catch(() => null), respuesta.status));
+        const nombre = respuesta.headers.get("Content-Disposition")?.split("UTF-8''")[1];
+        enlace.download = nombre ? decodeURIComponent(nombre) : "subtitulos.srt";
+        const url = URL.createObjectURL(await respuesta.blob());
+        enlace.href = url;
+        enlace.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) { avisar(e.message, "error"); }
+      finally { descargarSrt.disabled = false; }
+    } }, "Descargar subtítulos SRT");
     const todos = h("button", { disabled: !proyecto.clips.length, onclick: async () => {
       const n = proyecto.clips.length;
       if (!confirm(`Se exportarán los ${n} clips del proyecto, uno tras otro. ¿Continuar?`)) return;
@@ -1274,7 +1316,7 @@ async function vistaEditor(pid, miGeneracion) {
           } }, "Eliminar") : null));
     });
     return h("div", {},
-      h("div", { class: "fila", style: "margin-bottom:6px" }, exportar, todos,
+      h("div", { class: "fila", style: "margin-bottom:6px" }, exportar, descargarSrt, todos,
         h("button", { onclick: () => intentar(() => api("POST", `/proyectos/${pid}/abrir-carpeta`)) }, "Abrir carpeta")),
       h("p", { class: "tenue pequeno" }, "Salida: 1080×1920, H.264 + AAC, con los subtítulos incrustados." +
         (proyecto.exportaciones.length ? ` ${listas} lista(s)` + (enCurso ? `, ${enCurso} en curso o en cola.` : ".") : "")),
@@ -1285,6 +1327,7 @@ async function vistaEditor(pid, miGeneracion) {
     pintarClips(); pintarControles(); pintarDerecha(); ajustarVideo();
     titulo.value = clip ? clip.titulo : "";
     titulo.disabled = !clip;
+    duplicar.disabled = !clip || operaciones > 0;
   }
 
   // --- sondeo de exportaciones ---
@@ -1317,6 +1360,18 @@ async function vistaEditor(pid, miGeneracion) {
     const nuevo = await intentar(() => api("POST", `/proyectos/${pid}/clips`, { inicio, fin: Math.min(proyecto.duracion, inicio + 30), titulo: "" }));
     if (nuevo) { proyecto.clips.push(nuevo); proyecto.clips.sort((a, b) => a.inicio - b.inicio); elegirClip(nuevo); }
   }, title: "Crea un clip de hasta 30 segundos desde la posición actual" }, "+ Nuevo clip");
+  const duplicar = h("button", { disabled: !clip, onclick: async () => {
+    const original = clip.id;
+    duplicar.disabled = true;
+    const copia = await operar("duplicar", []);
+    duplicar.disabled = !clip;
+    if (!copia || !vigente()) return;
+    proyecto.clips.push(copia);
+    proyecto.clips.sort((a, b) => a.inicio - b.inicio);
+    if (clip?.id === original) elegirClip(copia);
+    else pintarClips();
+    avisar("Clip duplicado.");
+  } }, "Duplicar clip");
   const borrarClip = h("button", { class: "peligro", onclick: async () => {
     if (!clip || !confirm(`¿Eliminar el clip «${clip.titulo}»?`)) return;
     const id = clip.id;
@@ -1358,7 +1413,7 @@ async function vistaEditor(pid, miGeneracion) {
     h("div", { class: "editor" },
       h("section", { class: "panel panel-clips" }, h("h2", {}, "Clips"), listaClips,
         h("div", { class: "herramientas" },
-          h("div", { class: "botones-columna" }, nuevoClip, borrarClip),
+          h("div", { class: "botones-columna" }, nuevoClip, duplicar, borrarClip),
           h("div", { class: "grupo" },
             h("h3", {}, "Proponer clips"),
             h("div", { class: "fila pequeno" }, "Entre", minS, "y", maxS, "s", proponer),
@@ -1376,6 +1431,7 @@ async function vistaEditor(pid, miGeneracion) {
 
   video.addEventListener("loadedmetadata", () => { if (clip) video.currentTime = clip.inicio; ajustarVideo(); });
   pintarTodo();
+  document.addEventListener("keydown", atajoEditor);
   cuadro = requestAnimationFrame(bucle);
   temporizador = setInterval(sondear, 1500);
   limpiarVista = () => {
@@ -1383,6 +1439,7 @@ async function vistaEditor(pid, miGeneracion) {
     cancelado = true;
     cancelAnimationFrame(cuadro);
     window.removeEventListener("resize", alRedimensionar);
+    document.removeEventListener("keydown", atajoEditor);
     video.pause();
     video.removeAttribute("src");
     video.load();

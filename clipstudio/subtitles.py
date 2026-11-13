@@ -276,6 +276,21 @@ def tiempos_de_palabras(cue: dict, palabras: list[dict] | None = None) -> list[t
 
 # ---------- ASS ----------
 
+def a_srt(cues: list[dict]) -> str:
+    """Serializa subtítulos que ya están en el tiempo del clip exportado."""
+    def tiempo(segundos: float) -> str:
+        segundos, milisegundos = divmod(round(segundos * 1000), 1000)
+        minutos, segundos = divmod(segundos, 60)
+        horas, minutos = divmod(minutos, 60)
+        return f"{horas:02d}:{minutos:02d}:{segundos:02d},{milisegundos:03d}"
+
+    bloques = []
+    for numero, cue in enumerate(sorted(cues, key=lambda c: c["inicio"]), 1):
+        texto = "\n".join(linea for linea in cue["texto"].splitlines() if linea.strip())
+        bloques.append(f'{numero}\n{tiempo(cue["inicio"])} --> {tiempo(cue["fin"])}\n{texto}\n')
+    return "\n".join(bloques)
+
+
 def _tiempo_ass(seg: float) -> str:
     cs = max(0, int(round(seg * 100)))
     h, resto = divmod(cs, 360000)

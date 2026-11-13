@@ -226,3 +226,48 @@ def test_pipeline_remapea_ass_y_admite_exportaciones_antiguas(monkeypatch, tmp_p
     assert capturado["fin"] == (8 if con_cortes else 20)
     assert capturado["cues"][0]["inicio"] == (2 if con_cortes else 14)
     assert capturado["palabras"][0]["inicio"] == (2 if con_cortes else 14)
+
+
+def test_api_descarga_srt_con_cortes_y_duplica_clip(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from clipstudio import api, config, db
+
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "datos.sqlite")
+    db.iniciar()
+    proyecto = db.insertar("proyectos", {"nombre": "Prueba", "origen": "archivo",
+                                        "duracion": 30, "estado": "listo"})
+    clip = db.insertar("clips", {
+        "proyecto_id": proyecto["id"], "titulo": "Edición", "inicio": 10, "fin": 20,
+        "cortes": [tramo(12, 14)], "origen": "sugerido",
+        "subtitulos": [
+            {**tramo(11, 15), "texto": "Línea\n\nDos"},
+            {**tramo(12.5, 13.5), "texto": "Eliminado"},
+        ],
+        "estilo": {"tamano": 74}, "encuadre": "dividido", "recorte_x": 0.7,
+        "tiktok": {"contexto": "Tema", "texto": "#edicion"},
+    })
+    cliente = TestClient(api.app, base_url="http://localhost")
+    url = f'/api/clips/{clip["id"]}'
+    respuesta = cliente.get(url + "/subtitulos.srt")
+    assert respuesta.status_code == 200
+    assert respuesta.headers["content-disposition"] == "attachment; filename*=UTF-8''Edici%C3%B3n.srt"
+    assert respuesta.content.decode("utf-8") == "1\n00:00:01,000 --> 00:00:03,000\nLínea\nDos\n"
+
+    respuesta = cliente.post(url + "/duplicar")
+    assert respuesta.status_code == 201
+    copia = respuesta.json()
+    assert copia["id"] != clip["id"]
+    assert copia["titulo"] == "Edición (copia)"
+    assert copia["origen"] == "manual"
+    for campo in ("encuadre", "recorte_x", "cortes", "subtitulos", "tiktok"):
+        assert copia[campo] == clip[campo]
+    assert copia["estilo"]["tamano"] == 74
+    assert db.listar("exportaciones") == []
+
+    assert cliente.patch(f'/api/clips/{copia["id"]}', json={"titulo": "Otra", "subtitulos": []}).status_code == 200
+    assert cliente.get(f'/api/clips/{copia["id"]}/subtitulos.srt').status_code == 409
+    assert cliente.get(url + "/subtitulos.srt").status_code == 200
+
+    db.actualizar("clips", clip["id"], cortes=[])
+    assert "00:00:01,000 --> 00:00:05,000" in cliente.get(url + "/subtitulos.srt").text

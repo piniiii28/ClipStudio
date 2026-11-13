@@ -11,10 +11,10 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -481,6 +481,31 @@ def crear_clip(pid: str, datos: ClipNuevo) -> dict:
         p, segmentos, pipeline.preferencias_clip(), inicio, fin,
         datos.titulo.strip() or "Clip manual", "manual", [],
     )
+
+
+@app.post("/api/clips/{cid}/duplicar", status_code=201)
+def duplicar_clip(cid: str) -> dict:
+    with _transicion:
+        clip = _clip(cid)
+        _proyecto_listo(clip["proyecto_id"])
+        campos = ("proyecto_id", "inicio", "fin", "encuadre", "recorte_x", "subtitulos",
+                  "estilo", "cortes", "trayectoria", "composicion", "tiktok")
+        copia = {k: clip[k] for k in campos if k in clip}
+        return db.insertar("clips", {**copia, "titulo": f'{clip["titulo"][:112]} (copia)',
+                                     "origen": "manual", "motivos": []})
+
+
+@app.get("/api/clips/{cid}/subtitulos.srt")
+def descargar_subtitulos(cid: str) -> Response:
+    clip = _clip(cid)
+    inicio, fin = clip["inicio"], clip["fin"]
+    cues = subtitles.recortar(clip["subtitulos"], inicio, fin)
+    cues = cortes.remapear_subtitulos(cues, inicio, fin, clip["cortes"])
+    if not cues:
+        raise HTTPException(409, "El clip no tiene subtítulos en el tramo conservado.")
+    nombre = _nombre_seguro(clip["titulo"]) + ".srt"
+    return Response(subtitles.a_srt(cues), media_type="application/x-subrip; charset=utf-8",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(nombre)}"})
 
 
 class TikTokPublicacion(BaseModel):
