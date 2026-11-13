@@ -100,6 +100,35 @@ def formato_audio(idioma: str) -> str:
     return f'bv[height<=1080]+ba[language="{idioma}"]/b[height<=1080][language="{idioma}"]'
 
 
+
+def selector_audio(idioma: str):
+    """Selecciona vídeo y una única pista del idioma pedido, incluso con vídeo muxado.
+
+    yt-dlp entrega formatos ordenados de peor a mejor. Marcar el audio del vídeo
+    como ausente impide que el mezclador conserve el doblaje predeterminado.
+    """
+    formato_audio(idioma)  # misma validación que el selector textual
+
+    def seleccionar(ctx):
+        formatos = ctx.get("formats") or []
+        videos = [f for f in formatos if f.get("vcodec") not in (None, "none")
+                  and 0 < (f.get("height") or 0) <= 1080]
+        audios = [f for f in formatos if f.get("acodec") not in (None, "none")
+                  and f.get("vcodec") == "none" and f.get("language") == idioma]
+        if videos and audios:
+            video, audio = videos[-1], audios[-1]
+            yield {"format_id": f'{video["format_id"]}+{audio["format_id"]}',
+                   "ext": "mp4", "protocol": f'{video["protocol"]}+{audio["protocol"]}',
+                   "requested_formats": [{**video, "acodec": "none"}, audio]}
+        else:
+            combinados = [f for f in videos if f.get("acodec") not in (None, "none")
+                          and f.get("language") == idioma]
+            if combinados:
+                yield combinados[-1]
+
+    return seleccionar
+
+
 def idiomas_audio(url: str) -> list[str]:
     import yt_dlp
 
@@ -178,7 +207,7 @@ def descargar(
         titulo = str(info.get("title") or "Video importado")[:120]
         opciones = _opciones(destino, hook)
         if audio_idioma:
-            opciones["format"] = formato_audio(audio_idioma)
+            opciones["format"] = selector_audio(audio_idioma)
         with yt_dlp.YoutubeDL(opciones) as ydl:
             ydl.extract_info(url, download=True)
     except (Cancelado, ErrorMedia):

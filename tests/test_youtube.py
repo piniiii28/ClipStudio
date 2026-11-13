@@ -77,3 +77,43 @@ def test_api_persiste_audio_para_reintentos(tmp_path, monkeypatch):
     proyecto = db.obtener("proyectos", respuesta.json()["id"])
     assert proyecto["audio_idioma"] == "es-419"
     assert proyecto["idioma"] == "auto"
+
+
+def test_selector_doblaje_admite_video_muxado_y_no_elige_su_audio():
+    formatos = [
+        {"format_id": "mux-en", "vcodec": "h264", "acodec": "aac", "height": 720, "language": "en", "protocol": "https"},
+        {"format_id": "es", "vcodec": "none", "acodec": "aac", "language": "es", "protocol": "https"},
+    ]
+    selector = importer.selector_audio("es")
+    elegido = list(selector({"formats": formatos}))[0]
+    assert [f["format_id"] for f in elegido["requested_formats"]] == ["mux-en", "es"]
+    assert elegido["requested_formats"][0]["acodec"] == "none"
+    assert formatos[0]["acodec"] == "aac"  # no mutar metadatos originales
+    assert list(selector({"formats": formatos[:1]})) == []
+    assert list(selector({"formats": [{**formatos[0], "language": "es"}]}))[0]["language"] == "es"
+
+
+def test_descarga_local_real_ytdlp_conserva_solo_el_doblaje_elegido(tmp_path):
+    import shutil
+    import subprocess
+    import numpy as np
+    from yt_dlp import YoutubeDL
+
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("Requiere FFmpeg")
+    video, audio = tmp_path / "en.mp4", tmp_path / "es.m4a"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=s=160x90:r=5", "-f", "lavfi", "-i", "sine=frequency=440", "-t", "1", "-c:v", "libx264", "-c:a", "aac", str(video)], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=880", "-t", "1", "-c:a", "aac", str(audio)], check=True)
+    salida = tmp_path / "elegido.mp4"
+    formatos = [
+        {"format_id": "mux-en", "url": video.as_uri(), "vcodec": "h264", "acodec": "aac", "height": 90, "language": "en", "ext": "mp4"},
+        {"format_id": "audio-es", "url": audio.as_uri(), "vcodec": "none", "acodec": "aac", "language": "es", "ext": "m4a"},
+    ]
+    with YoutubeDL({"quiet": True, "enable_file_urls": True, "format": importer.selector_audio("es"), "outtmpl": str(salida), "merge_output_format": "mp4"}) as ydl:
+        ydl.process_ie_result({"id": "doblaje", "title": "Doblaje", "formats": formatos}, download=True)
+    pistas = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(salida)]))["streams"]
+    assert sum(p["codec_type"] == "audio" for p in pistas) == 1
+    pcm = subprocess.check_output(["ffmpeg", "-v", "error", "-i", str(salida), "-map", "0:a:0", "-f", "f32le", "-ac", "1", "-ar", "8000", "-"])
+    onda = np.frombuffer(pcm, dtype="float32")
+    frecuencia = np.fft.rfftfreq(len(onda), 1 / 8000)[np.argmax(abs(np.fft.rfft(onda)))]
+    assert frecuencia == pytest.approx(880, abs=5)
