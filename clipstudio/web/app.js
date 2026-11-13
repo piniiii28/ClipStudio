@@ -392,6 +392,8 @@ async function vistaEditor(pid, miGeneracion) {
 
   let clip = proyecto.clips[0] || null;
   let pestana = "subtitulos";
+  let escuchaFrase = null;
+  let busquedaTranscripcion = "";
   let seleccion = null;      // [indice, indice] de frases elegidas en la transcripcion
   let cancelado = false;
   const sugerenciasTikTok = new Map();
@@ -790,11 +792,12 @@ async function vistaEditor(pid, miGeneracion) {
   let cuadro = 0;
   function bucle() {
     if (cancelado) return;
-    if (clip && !video.paused) {
+    if (clip && !escuchaFrase && !video.paused) {
       const corte = corteEn(video.currentTime);
       if (corte) video.currentTime = corte.fin;
     }
-    if (clip && !video.paused && video.currentTime >= clip.fin) { video.pause(); video.currentTime = clip.inicio; }
+    if (escuchaFrase && !video.paused && video.currentTime >= escuchaFrase.fin) { video.pause(); video.currentTime = escuchaFrase.inicio; }
+    if (clip && !escuchaFrase && !video.paused && video.currentTime >= clip.fin) { video.pause(); video.currentTime = clip.inicio; }
     pintarSubtitulo();
     pintarFondo();
     pintarStream();
@@ -806,6 +809,12 @@ async function vistaEditor(pid, miGeneracion) {
     cuadro = requestAnimationFrame(bucle);
   }
   function reproducir() {
+    if (escuchaFrase) {
+      if (!video.paused) return video.pause();
+      if (video.currentTime < escuchaFrase.inicio || video.currentTime >= escuchaFrase.fin - .05) video.currentTime = escuchaFrase.inicio;
+      video.play().catch(() => avisar("No se pudo reproducir la frase.", "error"));
+      return;
+    }
     if (!clip) return;
     if (video.paused) {
       if (video.currentTime < clip.inicio - 0.05 || video.currentTime >= clip.fin - 0.05) video.currentTime = clip.inicio;
@@ -955,6 +964,7 @@ async function vistaEditor(pid, miGeneracion) {
 
   // --- lista de clips ---
   function elegirClip(c) {
+    escuchaFrase = null;
     encolarPendiente();
     clip = c;
     video.pause();
@@ -985,6 +995,7 @@ async function vistaEditor(pid, miGeneracion) {
     });
   }
   function pintarDerecha() {
+    if (pestana !== "transcripcion" && escuchaFrase) { escuchaFrase = null; video.pause(); if (clip) video.currentTime = clip.inicio; }
     fuenteStream = null;
     const barraPestanas = h("div", { class: "pestanas", role: "tablist" }, PESTANAS.map(([id, texto]) =>
       h("button", { class: pestana === id ? "activa" : "", role: "tab", "aria-selected": String(pestana === id), onclick: () => { pestana = id; pintarDerecha(); } },
@@ -1304,7 +1315,7 @@ async function vistaEditor(pid, miGeneracion) {
       h("button", { class: "frase" + (seleccion && i >= seleccion[0] && i <= seleccion[1] ? " elegida" : ""), onclick: (ev) => {
         if (ev.shiftKey && seleccion) seleccion = [Math.min(seleccion[0], i), Math.max(seleccion[0], i)];
         else seleccion = [i, i];
-        video.pause(); video.currentTime = f.inicio;
+        video.pause(); escuchaFrase = { inicio: f.inicio, fin: f.fin }; video.currentTime = f.inicio;
         const tope = panelDerecho.querySelector(".desplazable").scrollTop;
         pintarDerecha();
         panelDerecho.querySelector(".desplazable").scrollTop = tope;
@@ -1317,7 +1328,28 @@ async function vistaEditor(pid, miGeneracion) {
             [{ inicio: c.inicio, fin: f.inicio }, { inicio: f.fin, fin: c.fin }]).filter((c) => c.fin > c.inicio));
         } else cambiarCortes([...cortesDel(), { inicio: f.inicio, fin: f.fin }]);
       } }, estaCortado(f) ? "Restaurar" : "Quitar") : null));
-    return h("div", {}, h("div", { class: "fila", style: "margin-bottom:10px" }, crear, info), h("div", { class: "desplazable" }, filas));
+    const buscar = h("input", { type: "search", value: busquedaTranscripcion, placeholder: "Buscar en la transcripción", "aria-label": "Buscar en la transcripción" });
+    const contador = h("span", { class: "tenue pequeno", role: "status" });
+    const normalizar = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase();
+    function filtrar() {
+      busquedaTranscripcion = buscar.value;
+      const consulta = normalizar(busquedaTranscripcion.trim());
+      let visibles = 0;
+      filas.forEach((fila, i) => { fila.hidden = !normalizar(transcripcion.frases[i].texto).includes(consulta); if (!fila.hidden) visibles++; });
+      contador.textContent = `${visibles} de ${filas.length} frases`;
+    }
+    buscar.addEventListener("input", filtrar);
+    filtrar();
+    const escuchar = h("button", { disabled: !seleccion, onclick: () => {
+      const [a, b] = seleccion;
+      video.pause();
+      escuchaFrase = { inicio: transcripcion.frases[a].inicio, fin: transcripcion.frases[b].fin };
+      video.currentTime = escuchaFrase.inicio;
+      reproducir();
+    } }, "Escuchar selección");
+    const volver = h("button", { disabled: !clip, onclick: () => { escuchaFrase = null; video.pause(); video.currentTime = clip.inicio; } }, "Volver al clip");
+    return h("div", {}, h("div", { class: "fila", style: "margin-bottom:10px" }, buscar, contador),
+      h("div", { class: "fila", style: "margin-bottom:10px" }, crear, escuchar, volver, info), h("div", { class: "desplazable" }, filas));
   }
 
   function panelTikTok() {
