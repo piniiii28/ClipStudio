@@ -652,7 +652,7 @@ def encuadre_auto(cid: str) -> dict:
     encuadre = "dividido" if clip["encuadre"] == "dividido" else "rellenar"
     db.actualizar("clips", cid, recorte_x=seguimiento["recorte_x"],
                   trayectoria=seguimiento["trayectoria"], encuadre=encuadre)
-    return {"detectado": True, "clip": _clip(cid)}
+    return {"detectado": True, "clip": _clip(cid), "cobertura": seguimiento.get("cobertura")}
 
 
 # ---------- exportaciones ----------

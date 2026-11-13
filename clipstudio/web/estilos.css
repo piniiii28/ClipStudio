@@ -402,3 +402,17 @@ button.enlace { background: none; border: 0; padding: 0; color: var(--info); tex
 .atajos-editor { color: var(--tenue); font-size: 12px; }
 .atajos-editor summary { cursor: pointer; }
 .atajos-editor p { margin: 4px 0 0; }
+
+.zona-segura {
+  position: absolute;
+  inset: 10% 16% 22% 7%;
+  border: 1px dashed #fff;
+  box-shadow: 0 0 0 100vmax rgb(18 17 24 / 45%);
+  pointer-events: none;
+  z-index: 3;
+}
+.monitor-cabecera button[aria-pressed="true"] {
+  color: var(--acento);
+  background: var(--acento-suave);
+  border-color: var(--acento);
+}
