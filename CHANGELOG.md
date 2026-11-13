@@ -4,6 +4,23 @@ Formato: una entrada por versión publicada, con lo añadido, lo corregido y lo 
 que falta. El detalle técnico y las pruebas de cada función están en
 [docs/estado.md](docs/estado.md).
 
+## Próxima versión — sin publicar
+
+- Directos: marcadores manuales con nota, filtros por origen y pendientes, aviso de
+  momentos fuera del búfer y acceso directo al proyecto creado.
+- La captura de los últimos segundos muestra la duración realmente disponible;
+  los recortes que atraviesan una interrupción del vídeo se rechazan con explicación.
+- Transcripción: búsqueda sin distinguir acentos y escucha de frases o selección
+  fuera del clip activo, sin cambiar sus límites ni aplicar sus cortes.
+- Seguimiento: mantiene la identidad candidata con dos caras de tamaño parecido.
+  Continúa siendo seguimiento espacial; no reconoce al hablante.
+- Doblaje por enlace: acepta vídeo con audio incorporado junto a la pista elegida y
+  descarta el audio predeterminado al mezclarlos.
+- Compilación de escritorio verificable mediante GitHub Actions: portable,
+  instalador, SHA-256 y captura simulada con el ejecutable. No publica una release.
+
+Detalle, referencias y pendientes: [rondas de mejora](docs/rondas-mejora.md).
+
 ## 0.2.0 — 2026-11-12
 
 Primera versión distribuida con instalador para Windows y aviso de actualizaciones.

@@ -1,0 +1,86 @@
+name: Tests and Windows desktop preview
+
+on:
+  pull_request:
+    branches: [main, feature/youtube-discovery]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-preview-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLIPSTUDIO_DATA_DIR: ${{ runner.temp }}/clipstudio-tests
+      CLIPSTUDIO_BUSCAR_ACTUALIZACIONES: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: uv sync --locked
+      - run: uv run --locked pytest -q
+      - name: Browser workflow regression
+        run: |
+          uv pip install playwright==1.65.1
+          CHROMIUM_PATH="$(command -v google-chrome)" uv run --no-sync python tests/browser/workflows.py
+      - name: Simulated live capture regression
+        run: uv run --locked python scripts/prueba_vivo.py
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CLIPSTUDIO_DATA_DIR: ${{ runner.temp }}\clipstudio-tests
+      CLIPSTUDIO_BUSCAR_ACTUALIZACIONES: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: uv sync --locked
+      - run: uv run --locked python scripts/instalar_ffmpeg.py
+      - name: Add bundled tools to test PATH
+        shell: pwsh
+        run: '"$env:CLIPSTUDIO_DATA_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append'
+      - run: uv run --locked pytest -q
+      - name: Locate Inno Setup compiler
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $compiler)) { throw 'Inno Setup compiler not found on runner' }
+          "CLIPSTUDIO_ISCC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Build portable and installer
+        run: uv run --locked python scripts/compilar_escritorio.py
+      - name: Verify packaged live capture
+        run: uv run --locked python scripts/prueba_vivo.py --ejecutable dist/ClipStudio/ClipStudio.exe
+      - name: Installer checksum and portable archive
+        shell: pwsh
+        run: |
+          $installer = 'dist/ClipStudio-Setup.exe'
+          if (!(Test-Path $installer)) { throw 'Installer missing' }
+          $digest = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+          "$digest  ClipStudio-Setup.exe" | Set-Content -Encoding ascii "$installer.sha256"
+          Compress-Archive -Path dist/ClipStudio -DestinationPath dist/ClipStudio-portable.zip
+          git rev-parse HEAD | Set-Content -Encoding ascii dist/source-commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClipStudio-Windows-preview-${{ github.run_number }}
+          path: |
+            dist/ClipStudio-Setup.exe
+            dist/ClipStudio-Setup.exe.sha256
+            dist/ClipStudio-portable.zip
+            dist/source-commit.txt
+          if-no-files-found: error
+          retention-days: 14

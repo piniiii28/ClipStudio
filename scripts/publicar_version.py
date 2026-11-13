@@ -25,6 +25,7 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 INIT = RAIZ / "clipstudio" / "__init__.py"
 PYPROJECT = RAIZ / "pyproject.toml"
+LOCK = RAIZ / "uv.lock"
 DIST = RAIZ / "dist"
 INSTALADOR = DIST / "ClipStudio-Setup.exe"
 SHA256 = DIST / "ClipStudio-Setup.exe.sha256"
@@ -109,9 +110,10 @@ def main() -> int:
     if args.notas and not args.notas.is_file():
         raise SystemExit(f"No existe el archivo de notas: {args.notas}")
 
-    originales = {ruta: ruta.read_bytes() for ruta in (INIT, PYPROJECT)}
+    originales = {ruta: ruta.read_bytes() for ruta in (INIT, PYPROJECT, LOCK)}
     try:
         escribir_version(args.version)
+        ejecutar("uv", "lock")
         ejecutar(sys.executable, "-m", "pytest", "-q")
         INSTALADOR.unlink(missing_ok=True)
         ejecutar(sys.executable, str(RAIZ / "scripts" / "compilar_escritorio.py"))
@@ -131,7 +133,7 @@ def main() -> int:
     if not args.notas:
         print("Es un borrador con los asuntos de los commits. Editalo ahora si quieres cambiarlo.")
     confirmar(f"Crear el commit «Version {args.version}» y la etiqueta {etiqueta} (solo local)?")
-    ejecutar("git", "add", str(INIT), str(PYPROJECT))
+    ejecutar("git", "add", str(INIT), str(PYPROJECT), str(LOCK))
     ejecutar("git", "commit", "-m", f"Version {args.version}")
     ejecutar("git", "tag", "-a", etiqueta, "-m", f"ClipStudio {args.version}")
     if args.sin_publicar:

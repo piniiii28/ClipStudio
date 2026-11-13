@@ -158,3 +158,14 @@ La release debe ser pública, no ser borrador ni prerelease, y llamar exactament
 `ClipStudio-Setup.exe` y `ClipStudio-Setup.exe.sha256` a sus recursos. Las instalaciones que no
 traen esta función (la 0.1.0 original) no se actualizan solas: instálales la primera versión con
 actualizaciones a mano.
+
+
+## Compilación de revisión en GitHub Actions
+
+El workflow `Tests and Windows desktop preview` prueba el código y genera un
+instalador y portable para revisar los PR hacia `main` o `feature/youtube-discovery`.
+En la ejecución completada, descarga `ClipStudio-Windows-preview-<número>` desde
+Artifacts. Incluye SHA-256 y commit de origen; caduca a los 14 días.
+No publica releases ni cambia el canal estable. Valida el arranque, instalación y
+reinicio en Windows antes de publicar una versión nueva. Detalles de alcance y
+pruebas en [rondas-mejora.md](rondas-mejora.md).
