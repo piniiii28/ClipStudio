@@ -11,6 +11,13 @@ análisis y las propuestas iniciales se conservan como referencias históricas.
 
 ### Versión 0.4.0
 
+Verificada con 392 pruebas aprobadas y una omitida. En WebView2 se comprobaron títulos,
+legibilidad, búsqueda por tema, deshacer y rehacer, recuperación de un borrador tras
+conflicto, regiones de cámara y HUD e intervalos. El portable completó un análisis de
+80 planos, su cancelación y un reintento después de reiniciar. La compilación final
+exportó un MP4 con audio, subtítulos y cambio de composición. Un instalador con destino
+y datos aislados abrió la versión 0.4.0 con su proyecto de prueba.
+
 El editor incorpora sugerencias de títulos a partir del texto conservado, revisión de
 legibilidad y búsqueda de momentos por palabras del tema. Funcionan localmente.
 La revisión del ancho es aproximada y las propuestas de títulos son extractivas.
