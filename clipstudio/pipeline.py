@@ -326,7 +326,7 @@ class Gestor:
 
 
 def _extra(tabla: str, mensaje: str) -> dict:
-    return {"mensaje": mensaje} if tabla == "proyectos" else {}
+    return {"mensaje": mensaje} if tabla in ("proyectos", "analisis") else {}
 
 
 gestor = Gestor()

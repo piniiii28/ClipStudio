@@ -499,6 +499,8 @@ def guardar_preferencias(datos: Preferencias) -> dict:
         composicion = reframe.normalizar_composicion(datos.composicion) if datos.encuadre == "stream" else {}
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    # Los tiempos pertenecen a este video, las regiones sirven como preferencia global.
+    composicion.pop("tramos", None)
     db.guardar_preferencia(
         "clip", {"estilo": subtitles.estilo_para_preferencia(datos.estilo), "encuadre": datos.encuadre, "composicion": composicion}
     )

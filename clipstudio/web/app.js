@@ -591,6 +591,7 @@ async function vistaEditor(pid, miGeneracion) {
     } finally {
       operaciones -= 1;
       actualizarBloqueo();
+      pintarHistorial();
     }
   }
   const AVISO_GUARDADO = "No se pudieron guardar los últimos cambios. Vuelve a intentarlo.";
@@ -648,7 +649,8 @@ async function vistaEditor(pid, miGeneracion) {
     const trabajo = (proyecto.analisis || []).find(a => a.clip_id === clip?.id);
     if (!trabajo) return;
     const activo = ACTIVOS.includes(trabajo.estado);
-    estadoAnalisis.replaceChildren(h("div", {}, h("p", {}, trabajo.error || trabajo.mensaje || ESTADOS[trabajo.estado]),
+    const mensaje = trabajo.estado === "cancelado" ? "Análisis cancelado" : trabajo.error || trabajo.mensaje || ESTADOS[trabajo.estado];
+    estadoAnalisis.replaceChildren(h("div", {}, h("p", {}, mensaje),
       activo ? h("progress", { max: 100, value: trabajo.progreso, "aria-label": "Progreso del análisis" }) : null,
       activo ? h("button", { onclick: async () => { await intentar(() => api("POST", `/analisis/${trabajo.id}/cancelar`)); await sondear(); } }, "Cancelar análisis") : null,
       ["error", "cancelado"].includes(trabajo.estado) ? h("button", { onclick: iniciarAnalisis }, "Reintentar análisis") : null));

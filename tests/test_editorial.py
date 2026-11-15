@@ -150,3 +150,11 @@ def test_trabajo_publica_solo_revision_analizada(clip, monkeypatch):
     with pytest.raises(db.ConflictoRevision):
         pipeline.analizar_clip(a['id'], media.Cancelacion())
     assert db.obtener('clips', clip['id'])['revision'] == 1
+
+def test_preferencia_global_conserva_regiones_sin_tiempos(clip):
+    client = TestClient(api.app, base_url='http://127.0.0.1')
+    r = client.put('/api/preferencias/clip', json={'estilo': {}, 'encuadre': 'stream',
+        'composicion': {'tramos': [{'inicio': 0, 'fin': 3, 'modo': 'camara'}]}})
+    assert r.status_code == 200
+    assert not r.json()['composicion'].get('tramos')
+    assert pipeline._extra('analisis', 'Cancelado.') == {'mensaje': 'Cancelado.'}
