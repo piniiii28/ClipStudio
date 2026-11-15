@@ -9,6 +9,18 @@ análisis y las propuestas iniciales se conservan como referencias históricas.
 
 ## Situación actual
 
+### Versión 0.3.4
+
+Publicada como actualización estable con instalador Windows y archivo SHA-256.
+La prueba del actualizador, simulando una versión local 0.2.3, detectó 0.3.4 y comprobó
+que la huella publicada coincide con el paquete generado. La instalación local informó
+0.3.4 y se abrió en WebView2. Batería de 383 pruebas aprobadas y una omitida.
+
+La actualización se obtiene desde **Actualizaciones**, descargando el paquete desde la
+propia app y usando después **Instalar y reiniciar**. La búsqueda automática consulta
+como máximo cada seis horas y la búsqueda manual puede forzarse desde el panel.
+[Release 0.3.4](https://github.com/piniiii28/ClipStudio/releases/tag/v0.3.4).
+
 ### Versión 0.3.3
 
 El botón del motor alternativo se llama **Seguir por planos**. Las instrucciones de uso
