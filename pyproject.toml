@@ -1,6 +1,6 @@
 [project]
 name = "clipstudio"
-version = "0.3.5"
+version = "0.4.0"
 description = "Convierte videos largos en clips verticales con subtitulos, de forma local."
 requires-python = ">=3.11,<3.13"
 dependencies = [
