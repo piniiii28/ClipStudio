@@ -357,7 +357,8 @@ button.enlace { background: none; border: 0; padding: 0; color: var(--info); tex
 .actualizacion-boton { color: var(--tenue); }
 .actualizacion-boton.hay { color: var(--acento); border-color: var(--acento); }
 .actualizacion-panel {
-  position: absolute; right: 0; top: calc(100% + 10px); width: min(380px, 90vw); z-index: 6; padding: 16px;
+  position: fixed; right: auto; bottom: auto; top: 12px; left: 12px; width: min(420px, calc(100vw - 24px)); z-index: 6; padding: 16px;
+  max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain;
   background: var(--panel); border: 1px solid var(--borde-fuerte); border-radius: var(--radio); box-shadow: var(--sombra);
 }
 .actualizacion-panel h3 { margin-top: 12px; color: var(--acento); }
@@ -396,7 +397,6 @@ button.enlace { background: none; border: 0; padding: 0; color: var(--info); tex
 @media (max-width: 400px) {
   .cue { grid-template-columns: 54px 54px minmax(0, 1fr) auto; }
   .actualizacion { position: static; }
-  .actualizacion-panel { top: calc(100% + 6px); right: 8px; }
 }
 
 .atajos-editor { color: var(--tenue); font-size: 12px; }

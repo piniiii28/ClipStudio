@@ -9,6 +9,13 @@ análisis y las propuestas iniciales se conservan como referencias históricas.
 
 ## Situación actual
 
+### Versión 0.4.1
+
+El panel del actualizador usa coordenadas de la ventana. Se abre hacia arriba si el
+botón está cerca del borde inferior, limita su altura y permite desplazamiento interno.
+Se adapta al redimensionamiento y al desplazamiento de la página. La regresión comprueba
+bordes y alturas en ventanas de 1426×933, 1020×760, 640×480 y 360×320.
+
 ### Versión 0.4.0
 
 Verificada con 392 pruebas aprobadas y una omitida. En WebView2 se comprobaron títulos,

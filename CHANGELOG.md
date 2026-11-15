@@ -4,6 +4,12 @@ Formato de entradas por versión, con lo añadido, lo corregido y lo que se sabe
 que falta. El detalle técnico y las pruebas de cada función están en
 [docs/estado.md](docs/estado.md).
 
+## 0.4.1 — 2026-11-15
+
+- El panel de actualizaciones queda dentro de la ventana, se abre hacia arriba cuando
+  falta espacio debajo del botón y permite desplazarse por todo su contenido.
+- La posición se recalcula al cambiar el tamaño de la ventana y al desplazarse la página.
+
 ## 0.4.0 — 2026-11-15
 
 - Análisis por planos en segundo plano con progreso, cancelación y recuperación de tomas

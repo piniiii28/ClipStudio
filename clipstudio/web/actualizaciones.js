@@ -6,6 +6,21 @@ const MODOS = { instalada: "Aplicación instalada", git: "Copia del código (git
 
 function mb(n) { return (n / 1024 / 1024).toFixed(1) + " MB"; }
 
+export function posicionPanel(boton, anchoVentana, altoVentana, altoPanel) {
+  const margen = 12;
+  const ancho = Math.max(0, Math.min(420, anchoVentana - margen * 2));
+  const altoMaximo = Math.max(0, altoVentana - margen * 2);
+  const alto = Math.min(altoPanel, altoMaximo);
+  const debajo = boton.bottom + 8;
+  const preferida = debajo + alto <= altoVentana - margen ? debajo : boton.top - 8 - alto;
+  return {
+    left: Math.max(margen, Math.min(boton.left, anchoVentana - margen - ancho)),
+    top: Math.max(margen, Math.min(preferida, altoVentana - margen - alto)),
+    width: ancho,
+    maxHeight: altoMaximo,
+  };
+}
+
 export function iniciarActualizaciones({ h, api, avisar }) {
   const sitio = document.getElementById("estado-sistema");
   if (!sitio) return;
@@ -26,7 +41,16 @@ export function iniciarActualizaciones({ h, api, avisar }) {
     panel.hidden = !abierto;
     boton.setAttribute("aria-expanded", String(abierto));
     if (abierto) pintar();
+    posicionar();
   }
+  function posicionar() {
+    if (!abierto) return;
+    const posicion = posicionPanel(boton.getBoundingClientRect(), window.innerWidth, window.innerHeight, panel.getBoundingClientRect().height);
+    panel.style.left = `${posicion.left}px`;
+    panel.style.top = `${posicion.top}px`;
+  }
+  window.addEventListener("resize", posicionar);
+  document.addEventListener("scroll", posicionar, true);
   document.addEventListener("click", (ev) => { if (abierto && !ev.composedPath().includes(caja)) alternar(); });
   document.addEventListener("keydown", (ev) => { if (abierto && ev.key === "Escape") { alternar(); boton.focus(); } });
 
@@ -176,6 +200,7 @@ export function iniciarActualizaciones({ h, api, avisar }) {
       h("p", { class: "tenue pequeno" }, "Solo se consulta api.github.com, sin datos personales. Nada se descarga ni instala sin tu clic."),
     );
     panel.replaceChildren(...nodos.flat().filter(Boolean));
+    posicionar();
   }
 
   cargar();

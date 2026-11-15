@@ -75,7 +75,6 @@ body.studio { background: var(--fondo); }
 .studio .volumen-vivo { border-radius: 10px; }
 .studio .momento { border-radius: 12px; padding: 14px; }
 .conexion-vivo { padding: 12px 16px; border: 1px solid #f4be76; color: #f4be76; border-radius: 10px; margin-bottom: 18px; }
-.studio .actualizacion-panel { left: 10px; right: auto; max-width: min(420px, calc(100vw - 30px)); }
 @media (max-width: 1280px) {
   .studio .editor { grid-template-columns: 170px minmax(280px,1fr); }
   .studio .inspector { grid-column: 1 / -1; }
