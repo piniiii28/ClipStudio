@@ -1,6 +1,12 @@
 # ClipStudio para Windows
 
-Actualizado el **2026-11-15**. Guía de la versión 0.3.4 para Windows.
+Actualizado el **2026-11-15**. Guía de la versión 0.3.5 para Windows.
+
+## Corrección del actualizador en 0.3.5
+
+La ventana conserva la señal de actualización hasta que termina el motor. El instalador
+puede cerrar también ventanas antiguas que hayan quedado esperando confirmación al salir.
+Antes de iniciar la instalación se guardan las ediciones pendientes del clip.
 Estado completo de funciones y pendientes en [estado.md](estado.md).
 
 ## Novedades de 0.3.1

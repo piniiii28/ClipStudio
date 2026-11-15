@@ -319,6 +319,8 @@ def test_descarga_verifica_sha256_e_instala(entorno, monkeypatch):
     monkeypatch.setattr(act.subprocess, "Popen", lambda cmd, **k: lanzados.append((cmd, k)))
     act.lanzar_instalador_pendiente()
     cmd, k = lanzados[0]
+    assert act.hay_instalacion_pendiente()  # la ventana debe recibir el código de salida de actualización
+    assert act._pendiente["ruta"] is None
     assert cmd[0] == str(datos / "actualizaciones" / "ClipStudio-Setup.exe")
     assert {"/SILENT", "/CLOSEAPPLICATIONS", "/NORESTART"} <= set(cmd[1:])
     act.lanzar_instalador_pendiente()

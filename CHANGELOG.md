@@ -4,6 +4,13 @@ Formato de entradas por versión, con lo añadido, lo corregido y lo que se sabe
 que falta. El detalle técnico y las pruebas de cada función están en
 [docs/estado.md](docs/estado.md).
 
+## 0.3.5 — 2026-11-15
+
+- La señal de instalación permanece disponible después de lanzar el instalador,
+  para que la ventana reciba el código de salida de actualización y se cierre.
+- El instalador usa Restart Manager para cerrar los procesos que utilizan el ejecutable
+  sustituido, incluidas ventanas de versiones antiguas bloqueadas en un diálogo de cierre.
+
 ## 0.3.4 — 2026-11-15
 
 Actualización que agrupa las mejoras de biblioteca, entrega, seguimiento por planos

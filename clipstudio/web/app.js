@@ -70,6 +70,7 @@ function mensajeError(datos, estado) {
 }
 
 function avisar(texto, tipo = "") {
+  if (window.clipstudioInstalando && tipo === "error") return;
   const el = h("div", { class: "aviso " + tipo, role: tipo === "error" ? "alert" : "status" }, texto);
   document.getElementById("avisos").append(el);
   setTimeout(() => el.remove(), tipo === "error" ? 9000 : 4000);

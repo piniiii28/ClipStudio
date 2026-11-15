@@ -83,6 +83,9 @@ export function iniciarActualizaciones({ h, api, avisar }) {
         !confirm("La publicación no incluye suma SHA-256, así que no se pudo verificar la integridad del instalador. ¿Instalar de todos modos?")) return;
     ocupado = true; pintar();
     try {
+      if (!(await (window.clipstudioGuardarAntesDeCerrar?.() ?? true))) {
+        throw new Error("Guarda los cambios pendientes antes de instalar la actualización.");
+      }
       let confirmado = false;
       for (let intento = 0; intento < 2; intento++) {
         let resp;
@@ -90,7 +93,12 @@ export function iniciarActualizaciones({ h, api, avisar }) {
           resp = await fetch("/api/actualizaciones/instalar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmado }) });
         } catch { throw new Error("No se pudo conectar con ClipStudio."); }
         const datos = await resp.json().catch(() => null);
-        if (resp.ok) { tras = (datos && datos.mensaje) || "Instalando…"; return; }
+        if (resp.ok) {
+          window.clipstudioInstalando = true;
+          clearTimeout(sondeo);
+          tras = (datos && datos.mensaje) || "Instalando…";
+          return;
+        }
         if (resp.status === 409 && datos && datos.requiere_confirmacion && !confirmado) {
           if (!confirm(datos.detail)) return;   // avisa de grabación en vivo o trabajos activos
           confirmado = true;

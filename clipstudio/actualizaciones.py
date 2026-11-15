@@ -506,7 +506,7 @@ def _actividad() -> dict:
 
 
 def hay_instalacion_pendiente() -> bool:
-    return bool(_pendiente["ruta"])
+    return bool(_pendiente["ruta"] or _pendiente.get("lanzada"))
 
 
 def lanzar_instalador_pendiente() -> None:
@@ -519,6 +519,9 @@ def lanzar_instalador_pendiente() -> None:
         flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         subprocess.Popen([ruta, *ARGS_INSTALADOR], cwd=str(Path(ruta).parent), close_fds=True, creationflags=flags,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # La ventana consulta esta señal DESPUÉS del cierre del lifespan. La ruta
+        # ya se consumió para impedir un segundo lanzamiento del instalador.
+        _pendiente["lanzada"] = True
         log.info("Actualizaciones: instalador lanzado.")
     except OSError:
         log.exception("Actualizaciones: no se pudo ejecutar el instalador")

@@ -22,7 +22,10 @@ SolidCompression=yes
 WizardStyle=modern
 ; Las actualizaciones desde la app usan /SILENT /CLOSEAPPLICATIONS: cierra ClipStudio si sigue abierto
 ; y el [Run] con skipifnotsilent lo vuelve a abrir al terminar.
-CloseApplications=yes
+CloseApplications=force
+; Incluye versiones antiguas cuyo diálogo de cierre puede quedar abierto al parar el motor.
+; Restart Manager identifica los procesos que usan el ejecutable que se va a sustituir.
+CloseApplicationsFilter=ClipStudio.exe
 RestartApplications=no
 
 [Languages]
