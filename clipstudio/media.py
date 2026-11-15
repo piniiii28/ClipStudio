@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import tempfile
+from contextlib import ExitStack
 from collections import deque
 from pathlib import Path
 from typing import Callable
@@ -325,9 +327,15 @@ def exportar_clip(
     tiene_audio: bool = True,
     trayectoria: list[dict] | None = None,
     composicion: dict | None = None,
+    perfil: str = "social",
+    normalizar_audio: bool = False,
 ) -> None:
     """Corta [inicio, fin], reencuadra a 1080x1920, quema subtitulos y codifica H.264 + AAC."""
     duracion = fin - inicio
+    from .entrega import METADATOS_LIMPIOS, NORMALIZAR_AUDIO, PERFILES
+    if perfil not in PERFILES:
+        raise ErrorMedia("Perfil de exportación no válido.")
+    entrega = PERFILES[perfil]
     if duracion <= 0:
         raise ErrorMedia("El clip no tiene duracion: el fin debe ser mayor que el inicio.")
     if encuadre == "dividido" and juego is None:
@@ -348,14 +356,31 @@ def exportar_clip(
         trayectoria, inicio, composicion,
     )
     audio = "0:a:0?"
+    if entrega["ancho"] != 1080:
+        grafo = grafo.removesuffix("[v]") + f"[v_base];[v_base]scale={entrega['ancho']}:{entrega['alto']}[v]"
     if conservar is not None and tiene_audio:
-        grafo += f";[0:a:0]aselect='{_seleccion(conservar)}',asetpts=N/SR/TB[a]"
+        filtro_audio = f"aselect='{_seleccion(conservar)}',asetpts=N/SR/TB"
+        if normalizar_audio:
+            filtro_audio += "," + NORMALIZAR_AUDIO
+        grafo += f";[0:a:0]{filtro_audio}[a]"
         audio = "[a]"
-    ejecutar_ffmpeg(
-        [*entradas,
-         "-filter_complex", grafo, "-map", "[v]", "-map", audio,
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-         "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-movflags", "+faststart",
-         "-t", f"{duracion_salida:.3f}", str(destino)],
-        duracion_salida, cancel, progreso, cwd=cwd,
-    )
+    elif normalizar_audio and tiene_audio:
+        grafo += f";[0:a:0]{NORMALIZAR_AUDIO}[a]"
+        audio = "[a]"
+    with ExitStack() as temporales:
+        filtro = ["-filter_complex", grafo]
+        if len(grafo) > 12000:
+            # Las trayectorias con muchos cortes exceden la línea de comandos
+            # de Windows. FFmpeg lee el mismo grafo desde un archivo temporal.
+            carpeta = Path(temporales.enter_context(tempfile.TemporaryDirectory(prefix="filtro-", dir=cwd)))
+            archivo_filtro = carpeta / "encuadre.ffgraph"
+            archivo_filtro.write_text(grafo, encoding="utf-8")
+            filtro = ["-/filter_complex", str(archivo_filtro.resolve())]
+        ejecutar_ffmpeg(
+            [*entradas, *filtro, "-map", "[v]", "-map", audio,
+             "-c:v", "libx264", "-preset", entrega["preset"], "-crf", str(entrega["crf"]), "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "48000", "-movflags", "+faststart",
+             *METADATOS_LIMPIOS,
+             "-t", f"{duracion_salida:.3f}", str(destino)],
+            duracion_salida, cancel, progreso, cwd=cwd,
+        )

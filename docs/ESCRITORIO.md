@@ -1,7 +1,31 @@
 # ClipStudio para Windows
 
-Actualizado: **2026-11-12**. Primera versión de escritorio instalada y comprobada en este
-equipo. Estado completo de funciones y pendientes: [estado.md](estado.md).
+Actualizado el **2026-11-15**. Guía de la versión 0.3.4 para Windows.
+Estado completo de funciones y pendientes en [estado.md](estado.md).
+
+## Novedades de 0.3.1
+
+El acento de la interfaz es morado. En **Encuadre y estilo**, con Rellenar o Dividido,
+puedes pulsar **Seguir por planos** para calcular un seguimiento alternativo
+con detección de cambios de toma y estabilización. El botón **Seguir el rostro** aplica
+el seguimiento clásico. Ambos guardan la trayectoria que usa también el MP4 exportado.
+Desde 0.3.2 el modo por planos analiza todas las tomas de un clip de hasta 10 minutos,
+con un presupuesto de muestras adaptado a su cantidad y duración. Las trayectorias
+extensas se exportan mediante un archivo de filtros temporal para FFmpeg.
+
+## Novedades de 0.3.0
+
+La biblioteca incluye miniaturas, búsqueda, filtros y ordenación. El editor incorpora una
+onda de audio navegable. En **Exportar** puedes elegir Social, Calidad o Borrador, activar
+la normalización de volumen, revisar la salida y generar una portada vertical JPG.
+La portada usa el fotograma completo ajustado con fondo difuminado.
+
+El panel En vivo muestra problemas de conexión con el motor y permite marcar un momento
+con **Alt+M** mientras el foco está fuera de los campos de texto. Se corrigió el guardado
+del editor al cerrar desde la dirección versionada de la aplicación.
+
+El registro de pruebas de la ventana nativa, el portable, el instalador y los canales
+reales está en [iteraciones-openshorts.md](iteraciones-openshorts.md).
 
 ## Abrir e instalar
 

@@ -25,6 +25,11 @@ log = logging.getLogger("clipstudio.desktop")
 SIN_VENTANA = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def es_pagina_motor(url: str | None, url_motor: str) -> bool:
+    actual, origen = urlsplit(url or ""), urlsplit(url_motor)
+    return actual.scheme == origen.scheme and actual.netloc == origen.netloc and actual.path in ("", "/")
+
+
 class SelectorCarpeta:
     """Único método nativo expuesto; solo admite la página principal del motor."""
 
@@ -36,9 +41,7 @@ class SelectorCarpeta:
         import webview
 
         ventana = self._obtener_ventana()
-        actual = urlsplit(ventana.get_current_url() or "")
-        if (actual.scheme != self._origen.scheme or actual.netloc != self._origen.netloc
-                or actual.path not in ("", "/")):
+        if not es_pagina_motor(ventana.get_current_url(), self._origen.geturl()):
             raise PermissionError("El selector solo está disponible en la página local de ClipStudio.")
         # pywebview no admite título personalizado en create_file_dialog.
         rutas = ventana.create_file_dialog(webview.FOLDER_DIALOG)
@@ -217,7 +220,7 @@ def main() -> int:
 
         def terminar():
             try:
-                if ventana.get_current_url() == motor.url + "/" or (ventana.get_current_url() or "").startswith(motor.url + "/#"):
+                if es_pagina_motor(ventana.get_current_url(), motor.url):
                     guardado = threading.Event()
                     resultado = []
                     ventana.evaluate_js("Promise.resolve(window.clipstudioGuardarAntesDeCerrar?.() ?? true)",

@@ -1,8 +1,73 @@
 # Registro de cambios
 
-Formato: una entrada por versión publicada, con lo añadido, lo corregido y lo que se sabe
+Formato de entradas por versión, con lo añadido, lo corregido y lo que se sabe
 que falta. El detalle técnico y las pruebas de cada función están en
 [docs/estado.md](docs/estado.md).
+
+## 0.3.4 — 2026-11-15
+
+Actualización que agrupa las mejoras de biblioteca, entrega, seguimiento por planos
+y tema morado verificadas en las compilaciones locales 0.3.0 a 0.3.3.
+Incluye el instalador Windows y su comprobación SHA-256 para el actualizador.
+
+## 0.3.3 — 2026-11-15
+
+- El botón del encuadre alternativo pasa a llamarse **Seguir por planos**.
+
+## 0.3.2 — 2026-11-15
+
+- Seguimiento por planos con presupuesto de muestreo adaptado al número y duración
+  de las tomas. Procesa todas las tomas de clips de hasta 10 minutos.
+- Exportación de trayectorias extensas mediante archivo temporal de filtros de FFmpeg,
+  para admitir grafos que superan la longitud de la línea de comandos de Windows.
+- Pruebas de análisis y exportación de 60 tomas sintéticas, trayectoria de 1000 puntos
+  y secuencia repetida con 80 planos y detección facial real. Regresión de 383 pruebas
+  aprobadas y una omitida.
+- Corregida una comprobación inestable de duración en las pruebas de fondos remotos,
+  usando tolerancia numérica para decimales.
+
+## 0.3.1 — 2026-11-15
+
+- Acento morado en navegación, botones, selección y forma de onda.
+- Segundo botón **Seguir por planos · OpenShorts** junto al seguimiento clásico.
+  Usa PySceneDetect y YuNet, con zona de tolerancia, confirmación de desplazamientos
+  grandes y reinicio al cambiar de toma. Comparte trayectoria entre vista previa y MP4.
+- El análisis admite clips de hasta 10 minutos y 30 planos. Un resultado sin rostros
+  suficientes conserva el encuadre anterior. Los límites modificados durante el análisis
+  se detectan antes de guardar el resultado.
+- Batería de regresión de 381 pruebas aprobadas, con detección y exportación real entre
+  dos tomas y prueba de seguimiento sobre un fragmento local de TenZ.
+
+## 0.3.0 — 2026-11-15
+
+Compilación e instalación local verificadas en Windows.
+
+### Añadido
+
+- Biblioteca con miniaturas, búsqueda sin acentos, filtro por estado, ordenación y resumen.
+- Tema oscuro con acento menta, navegación lateral y distribución adaptable del editor.
+- Forma de onda con navegación temporal mediante ratón y teclado.
+- Perfiles Social y Calidad a 1080 × 1920, y Borrador a 720 × 1280, para exportación individual y por lote.
+- Normalización opcional de volumen y limpieza de metadatos del archivo exportado.
+- Revisión previa de resolución, audio, duración, subtítulos, cortes y cámara pendiente.
+- Portadas JPG verticales a partir de un fotograma, con fondo difuminado.
+- Aviso de pérdida de conexión con el motor en En vivo y atajo Alt+M para marcar momentos.
+
+### Corregido
+
+- Guardado de cambios al cerrar la ventana desde una dirección con versión en la URL.
+- Caché auxiliar acotada, escritura atómica y entrega de imágenes protegida frente a limpieza concurrente.
+
+### Verificación
+
+373 pruebas aprobadas y una omitida. Flujo integral de 81 comprobaciones desde fuente,
+46 comprobaciones de captura simulada con el portable y captura real breve en Twitch
+bystaxx y Kick rowmeister. Veinte iteraciones y alcance detallados en
+[docs/iteraciones-openshorts.md](docs/iteraciones-openshorts.md).
+
+La muestra de Twitch incluyó publicidad. Kick conectó el chat sin recibir mensajes durante
+la muestra. La continuidad de sesiones largas y la descarga de alta calidad de Kick
+requieren pruebas adicionales. Se conservan los pendientes de sincronización de YouTube.
 
 ## 0.2.3 — 2026-11-13
 

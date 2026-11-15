@@ -13,6 +13,8 @@ const ETIQUETAS = { conectando: "CONECTANDO", grabando: "GRABANDO", detenido: "D
 
 export function vistaVivo(ctx) {
   const { h, api, avisar, intentar, vista, vigente, sondear, alLimpiar } = ctx;
+  const conexion = h("p", { class: "conexion-vivo", role: "status", hidden: true });
+  let fallosConexion = 0;
   let sesion = null;
   let consultando = false;
   let ocupado = false;          // hay un clip en preparación: se desactivan los botones
@@ -176,6 +178,7 @@ export function vistaVivo(ctx) {
       estadoChat, errorChat, actividadChat));
 
   vista.append(
+    conexion,
     h("header", { class: "portada portada-vivo" },
       h("h1", {}, "En vivo"),
       h("p", { class: "tenue" }, "Graba un directo, sigue la actividad del chat y envía los mejores momentos a Proyectos.")),
@@ -422,13 +425,26 @@ export function vistaVivo(ctx) {
     try {
       const s = await api("GET", "/vivo");
       if (!vigente()) return;
+      fallosConexion = 0;
+      conexion.hidden = true;
       sesion = s;
       pintar();
-    } catch { /* un fallo puntual de red no debe llenar la pantalla de avisos */ }
+    } catch {
+      if (vigente() && ++fallosConexion >= 2) {
+        conexion.textContent = "Se perdió la conexión con el motor. Reintentando…";
+        conexion.hidden = false;
+      }
+    }
     finally { consultando = false; }
   }
 
   consultar();
   sondear(consultar, 1500);
-  alLimpiar(() => { /* navegar fuera no para la grabación: sigue en segundo plano */ });
+  const atajoVivo = e => {
+    if (e.repeat || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || e.target.isContentEditable) return;
+    if (e.altKey && e.code === "KeyM" && !marcar.disabled) { e.preventDefault(); marcar.click(); }
+  };
+  window.addEventListener("keydown", atajoVivo);
+  marcar.title = "Marcar momento · Alt+M";
+  alLimpiar(() => { window.removeEventListener("keydown", atajoVivo); });
 }

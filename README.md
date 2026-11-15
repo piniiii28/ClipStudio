@@ -23,7 +23,7 @@ cuentas, sin nube y sin costos por uso.
 5. Genera subtítulos que puedes editar: texto, tiempos, estilos prefabricados, palabra resaltada,
    caja de fondo, palabras por línea, tamaño, color y posición.
 6. Añade un título gancho con la duración que quieras.
-7. Previsualiza y exporta un MP4 real (1080×1920, H.264 + AAC), de uno en uno o todos a la vez.
+7. Previsualiza y exporta un MP4 real (1080×1920 o borrador a 720×1280, H.264 + AAC), de uno en uno o todos a la vez.
 
 También puedes quitar frases y silencios del medio del clip, añadir una marca de agua y
 aplicar el estilo a otros clips. En **En vivo**, captura Twitch, YouTube o Kick, revisa una
@@ -34,6 +34,44 @@ Estado de implementación, pruebas y pendientes: [docs/estado.md](docs/estado.md
 
 
 Historial de versiones: [CHANGELOG.md](CHANGELOG.md).
+
+## Biblioteca y preparación de la publicación
+
+En **Encuadre y estilo**, elige **Rellenar** o **Dividido** para acceder a dos botones
+de seguimiento. **Seguir el rostro** aplica el motor clásico. **Seguir por planos**
+aplica el motor alternativo, que detecta cortes, reinicia la selección del
+sujeto por toma y estabiliza el movimiento con una zona de tolerancia. Analiza hasta
+10 minutos por clip, con muestreo adaptado a la cantidad y duración de las tomas.
+Ambas opciones usan el detector facial local YuNet.
+Puedes recalcular el seguimiento con cualquiera de los dos botones.
+
+La alternativa adapta reglas de seguimiento de OpenShorts y usa PySceneDetect para los
+cortes. La selección por voz y la composición automática de varios tipos de plano
+requieren desarrollo adicional. El acento de la interfaz es morado desde 0.3.1.
+
+La biblioteca muestra miniaturas, contadores, búsqueda sin acentos, filtro por estado y
+ordenación por fecha, nombre o número de clips. En el editor, pulsa la forma de onda para
+situarte en un punto del clip. Con el control enfocado también puedes usar las flechas.
+La onda conserva la posición temporal del audio de origen entre los límites del fragmento.
+
+En **Exportar** elige un perfil de salida.
+
+- **Social** genera 1080 × 1920 con la configuración habitual.
+- **Calidad** genera 1080 × 1920 con mayor calidad de compresión y más tiempo de proceso.
+- **Borrador** genera 720 × 1280 para revisar una salida ligera.
+
+Puedes activar **Uniformar volumen de voz** antes de exportar un clip o un lote. **Revisar antes de exportar**
+muestra resolución, audio, duración, subtítulos y avisos sobre la fuente o la cámara del
+encuadre Stream. Las preferencias se recuerdan en la ventana.
+
+En **Portada vertical**, elige el fotograma actual o un instante conservado del clip y
+descarga un JPG de 720 × 1280. La portada ajusta el fotograma completo con fondo difuminado.
+La composición y los subtítulos del video se previsualizan desde el editor.
+
+En vivo permite marcar un momento mediante **Alt+M** cuando el foco está fuera de un campo
+de texto. La versión 0.3.0 y sus veinte iteraciones se detallan en
+[docs/iteraciones-openshorts.md](docs/iteraciones-openshorts.md). La atribución de las
+adaptaciones de OpenShorts está en [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Hashtags para TikTok
 

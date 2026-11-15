@@ -1,5 +1,9 @@
 # Rondas de mejora de ClipStudio
 
+La ronda del 15 de noviembre de 2026 y sus veinte iteraciones para la versión 0.3.0 se
+documentan en [iteraciones-openshorts.md](iteraciones-openshorts.md). Este archivo conserva
+el registro de la ronda anterior.
+
 Fecha: 2026-11-13. Base: `feature/youtube-discovery`.
 Rama: `improve/live-import-workflows`.
 

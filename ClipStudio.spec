@@ -9,7 +9,7 @@ datos = [(str(raiz / 'clipstudio' / 'web'), 'clipstudio/web'),
 for paquete in ('faster_whisper', 'yt_dlp', 'certifi'):
     datos += collect_data_files(paquete)
 datos += collect_data_files('cv2', includes=['data/*.xml'])
-for paquete in ('pywebview', 'yt-dlp', 'faster-whisper'):
+for paquete in ('pywebview', 'yt-dlp', 'faster-whisper', 'scenedetect-headless'):
     datos += copy_metadata(paquete)
 binarios = [(str(raiz / 'build' / 'bin' / nombre), 'bin') for nombre in ('ffmpeg.exe', 'ffprobe.exe', 'node.exe')]
 ocultos = collect_submodules('uvicorn') + collect_submodules('yt_dlp')

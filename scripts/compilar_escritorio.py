@@ -49,6 +49,7 @@ def main() -> int:
                     shutil.copy2(fuente, destino)
     (assets / 'componentes.json').write_text(json.dumps(versiones, indent=2), encoding='utf-8')
     shutil.copy2(ROOT / 'docs' / 'ESCRITORIO.md', assets / 'LEEME.md')
+    shutil.copy2(ROOT / 'THIRD_PARTY_NOTICES.md', assets / 'THIRD_PARTY_NOTICES.md')
     subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', str(ROOT / 'ClipStudio.spec')], cwd=ROOT, check=True)
     iscc = os.environ.get('CLIPSTUDIO_ISCC') or shutil.which('iscc')
     if iscc:

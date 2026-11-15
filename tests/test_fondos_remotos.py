@@ -180,7 +180,7 @@ def test_obtener_tramo_descarga_guarda_en_cache_y_poda(tmp_path, monkeypatch):
     fondo = {"id": ID_MINECRAFT, "duracion": 3487}
     ruta, inicio = fondos_remotos.obtener_tramo(fondo, 15, tmp_path / "t1", Cancel())
     assert inicio == 0.0 and ruta.parent == tmp_path / "cache" and ruta.read_bytes() == b"v" * 80
-    assert len(peticiones) == 1 and peticiones[0][2] - peticiones[0][1] == 35        # clip 15 s + 20 s
+    assert len(peticiones) == 1 and peticiones[0][2] - peticiones[0][1] == pytest.approx(35)  # clip 15 s + 20 s
     # segunda vez: sale de la cache (35 >= 15 + 10), no hay otra descarga
     fondos_remotos.obtener_tramo(fondo, 15, tmp_path / "t2", Cancel())
     assert len(peticiones) == 1

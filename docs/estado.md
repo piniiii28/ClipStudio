@@ -1,6 +1,6 @@
 # Estado del proyecto y próximos pasos
 
-Actualizado: **2026-11-12**. Este archivo resume la implementación actual. Los informes de
+Actualizado el **2026-11-15**. Este archivo resume la implementación actual. Los informes de
 análisis y las propuestas iniciales se conservan como referencias históricas.
 
 
@@ -8,6 +8,69 @@ análisis y las propuestas iniciales se conservan como referencias históricas.
 > escritorio. Las pruebas en navegador son apoyo; ver [AGENTS.md](../AGENTS.md).
 
 ## Situación actual
+
+### Versión 0.3.3
+
+El botón del motor alternativo se llama **Seguir por planos**. Las instrucciones de uso
+de README y de escritorio utilizan este nombre.
+
+### Versión 0.3.2
+
+El seguimiento por planos procesa todas las tomas de clips de hasta 10 minutos.
+El presupuesto de muestras crece con la cantidad de planos y se reparte por duración,
+con un mínimo de cuatro muestras por toma. Los grafos extensos de exportación se
+entregan a FFmpeg mediante un archivo temporal para admitir trayectorias grandes en Windows.
+
+La regresión pasa 383 pruebas y omite una. Incluye análisis y exportación de 60 tomas
+sintéticas, exportación de 1000 puntos de seguimiento y limpieza del archivo temporal
+tras éxito o fallo. Una secuencia de 128 segundos construida repitiendo el fragmento
+local de TenZ produjo 80 planos, 624 puntos y cobertura facial completa de las muestras.
+La misma secuencia se analizó desde el botón de la ventana del portable 0.3.2 y se exportó
+con el perfil Borrador. La interfaz mostró la exportación lista y el instalador actualizó
+la app a 0.3.2. El ejecutable instalado coincide con el portable probado.
+
+### Versión 0.3.1
+
+El acento de la interfaz y la forma de onda pasan a morado. **Seguir por planos ·
+OpenShorts** añade una alternativa al motor clásico en los encuadres Rellenar y Dividido.
+Usa PySceneDetect para cortes y YuNet para rostros, con reinicio por toma, zona de tolerancia
+y confirmación de movimientos grandes. La trayectoria se guarda con el clip y se comparte
+entre vista previa y exportación. Admite hasta 10 minutos y 30 planos por análisis.
+La selección de hablante mediante audio y los cambios automáticos de composición siguen
+pendientes. El modo Stream conserva sus controles de cámara y gameplay.
+
+La batería de regresión de esta versión pasa 381 pruebas, incluida detección de cortes
+con tiempos enteros y decimales, estabilidad de cámara, protección frente a cambios
+concurrentes y exportación real de la trayectoria entre dos tomas.
+En el portable 0.3.1 se comprobó el botón alternativo con un fragmento aislado de TenZ,
+con tres planos y cobertura facial completa de las muestras. La exportación desde el
+motor compilado terminó correctamente. El instalador actualizó la app y la biblioteca
+existente se abrió con el tema morado.
+
+### Versión 0.3.0
+
+Compilada, instalada y abierta en Windows. La biblioteca incorpora miniaturas, búsqueda sin
+acentos, filtros, ordenación y contadores. El editor muestra la forma de onda y permite
+elegir perfiles de exportación, normalizar volumen, revisar la salida y generar portadas JPG.
+La navegación y el formulario En vivo se comprobaron también en una ventana de 1020 × 760.
+Se corrigió el guardado al cerrar con la URL versionada, con verificación del dato persistido.
+
+La revisión de OpenShorts y las veinte iteraciones están documentadas en
+[iteraciones-openshorts.md](iteraciones-openshorts.md). Se mantienen JavaScript modular y
+WebView2, aprovechando el motor local y las funciones existentes.
+
+- Batería actual de 373 pruebas aprobadas y una omitida.
+- Flujo integral con voz real de 81 comprobaciones sobre el servidor desde fuente.
+- Captura simulada de 46 comprobaciones con el portable compilado.
+- Twitch bystaxx y Kick rowmeister entregaron captura, imagen, conexión al chat y clips
+  breves. Twitch recibió tres mensajes e incluyó publicidad. Kick recibió cero durante
+  la muestra. El clip de Kick se exportó a 720 × 1280 con normalización.
+
+La continuidad durante sesiones largas y la descarga de alta calidad de Kick requieren
+pruebas adicionales. Durante la revisión, una ventana de prueba vacía al restaurarse
+recuperó el contenido tras reiniciarse. La instalación final se abrió correctamente.
+
+### Funciones disponibles
 
 ClipStudio permite importar videos, crear clips verticales, editar subtítulos y encuadres,
 y exportar MP4. Captura un directo de Twitch, YouTube o Kick, muestra una imagen reciente

@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import youtube
+from . import entrega, media, vistas, reframe_planos
 from . import __version__, actualizaciones, ajustes, config, cortes, db, fondos_remotos, hashtags, importer, pipeline, reframe, subtitles, suggest, vivo
 from .pipeline import gestor
 
@@ -403,7 +404,12 @@ def dividir(pid: str, datos: Dividir) -> dict:
     return detalle
 
 
-class ExportarVarios(BaseModel):
+class OpcionesEntrega(BaseModel):
+    perfil: Literal["social", "calidad", "borrador"] = "social"
+    normalizar_audio: bool = False
+
+
+class ExportarVarios(OpcionesEntrega):
     origen: str | None = None      # None = todos; o 'sugerido' | 'manual' | 'division'
 
 
@@ -422,7 +428,7 @@ def exportar_todos(pid: str, datos: ExportarVarios) -> dict:
         if not clips:
             raise HTTPException(409, "No hay clips que exportar.")
         for clip in clips:
-            _encolar_exportacion(clip)
+            _encolar_exportacion(clip, {"perfil": datos.perfil, "normalizar_audio": datos.normalizar_audio})
     detalle = _detalle(pid)
     detalle["encolados"] = len(clips)
     return detalle
@@ -696,25 +702,92 @@ def encuadre_auto(cid: str) -> dict:
 
 # ---------- exportaciones ----------
 
+@app.post("/api/clips/{cid}/encuadre-planos")
+def encuadre_planos(cid: str) -> dict:
+    clip = _clip(cid)
+    _proyecto_listo(clip["proyecto_id"])
+    try:
+        resultado = reframe_planos.detectar(pipeline.ruta_proxy(clip["proyecto_id"]), clip["inicio"], clip["fin"])
+    except media.ErrorMedia as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if resultado is None:
+        return {"detectado": False, "clip": clip}
+    # Un análisis largo puede coincidir con otra pestaña editando los límites.
+    with _transicion:
+        actual = _clip(cid)
+        if (actual["inicio"], actual["fin"]) != (clip["inicio"], clip["fin"]):
+            raise HTTPException(409, "Los límites cambiaron durante el análisis. Vuelve a analizar el clip.")
+        encuadre = "dividido" if actual["encuadre"] == "dividido" else "rellenar"
+        db.actualizar("clips", cid, recorte_x=resultado["recorte_x"],
+                      trayectoria=resultado["trayectoria"], encuadre=encuadre)
+    return {"detectado": True, "clip": _clip(cid), "cobertura": resultado["cobertura"], "planos": resultado["planos"]}
+
+@app.get("/api/proyectos/{pid}/miniatura.jpg")
+def miniatura_proyecto(pid: str):
+    p = _proyecto(pid)
+    try:
+        ruta = vistas.imagen(pipeline.ruta_proxy(pid), pipeline.carpeta_proyecto(pid), "miniatura", min(2, (p.get("duracion") or 0) / 2))
+    except media.ErrorMedia as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(ruta, media_type="image/jpeg")
+
+
+@app.get("/api/clips/{cid}/revision")
+def revisar_exportacion(cid: str, perfil: Literal["social", "calidad", "borrador"] = "social"):
+    clip = _clip(cid)
+    p = _proyecto_listo(clip["proyecto_id"])
+    fuente = pipeline.ruta_fuente(p) or pipeline.ruta_proxy(p["id"])
+    try:
+        return entrega.revisar(clip, media.sondear(fuente), perfil)
+    except media.ErrorMedia as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/clips/{cid}/portada.jpg")
+def portada_clip(cid: str, momento: float | None = None, descargar: bool = False):
+    import math
+    clip = _clip(cid)
+    try:
+        if momento is not None and not math.isfinite(momento):
+            raise ValueError("El tiempo del fotograma debe ser finito.")
+        tiempo = vistas.momento_conservado(clip, momento)
+        ruta = vistas.imagen(pipeline.ruta_proxy(clip["proyecto_id"]), pipeline.carpeta_proyecto(clip["proyecto_id"]), "portada", tiempo)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except media.ErrorMedia as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return Response(ruta, media_type="image/jpeg", headers={"Content-Disposition": 'attachment; filename="portada.jpg"'} if descargar else None)
+
+
+@app.get("/api/clips/{cid}/onda.png")
+def onda_clip(cid: str):
+    clip = _clip(cid)
+    try:
+        ruta = vistas.imagen(pipeline.ruta_proxy(clip["proyecto_id"]), pipeline.carpeta_proyecto(clip["proyecto_id"]), "onda", inicio=clip["inicio"], fin=clip["fin"])
+    except (ValueError, media.ErrorMedia) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return Response(ruta, media_type="image/png")
+
 @app.post("/api/clips/{cid}/exportar", status_code=201)
-def exportar_clip(cid: str) -> dict:
+def exportar_clip(cid: str, datos: OpcionesEntrega = OpcionesEntrega()) -> dict:
     if not config.find_tool("ffmpeg"):
         raise HTTPException(503, "FFmpeg no esta instalado. Ejecuta: uv run python scripts/instalar_ffmpeg.py")
     # Mismo candado que el borrado: una exportacion no puede colarse mientras se elimina el proyecto.
     with _transicion:
         clip = _clip(cid)
         _proyecto_listo(clip["proyecto_id"])
-        exp = _encolar_exportacion(clip)
+        exp = _encolar_exportacion(clip, datos.model_dump())
     exp.pop("parametros")
     return exp
 
 
-def _encolar_exportacion(clip: dict) -> dict:
+def _encolar_exportacion(clip: dict, opciones: dict | None = None) -> dict:
     """Guarda una copia inmutable del clip y la pone en cola. Llamar con `_transicion` tomado."""
     parametros = {k: clip[k] for k in ("inicio", "fin", "encuadre", "recorte_x", "subtitulos", "estilo")}
     parametros["cortes"] = clip.get("cortes") or []
     parametros["trayectoria"] = clip.get("trayectoria") or []
     parametros["composicion"] = clip.get("composicion") or {}
+    parametros["entrega"] = opciones or {"perfil": "social", "normalizar_audio": False}
     exp = db.insertar(
         "exportaciones",
         {"clip_id": clip["id"], "proyecto_id": clip["proyecto_id"], "titulo": clip["titulo"],

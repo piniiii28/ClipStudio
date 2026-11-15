@@ -4,6 +4,7 @@
 import { vistaVivo } from "./vivo.js";
 import { vistaAjustes } from "./ajustes.js";
 import { crearSelectorStream, dibujarStream } from "./encuadre-stream.js";
+import { crearEntrega, crearOnda } from "./entrega.js";
 import { iniciarActualizaciones } from "./actualizaciones.js";
 
 const vista = document.getElementById("vista");
@@ -100,6 +101,7 @@ function fmtDuracion(s) {
 // ---------- enrutado ----------
 
 function navegar() {
+  document.body.classList.toggle("vista-editor", /^#\/p\//.test(location.hash));
   generacion += 1;
   clearInterval(temporizador);
   temporizador = null;
@@ -196,6 +198,24 @@ let enlaceTendencia = "";
 // ---------- vista: proyectos ----------
 
 function vistaProyectos() {
+  let biblioteca = [];
+  let ultimaLista = "";
+  const resumen = h("div", { class: "resumen-biblioteca", "aria-label": "Resumen de biblioteca" });
+  const buscar = h("input", { type: "search", placeholder: "Buscar un proyecto…", "aria-label": "Buscar proyectos" });
+  const filtro = h("select", { "aria-label": "Filtrar proyectos" }, ...[["", "Todos los estados"], ["listo", "Listos para editar"], ["procesando", "En proceso"], ["error", "Con errores"]].map(([v,t]) => h("option", { value: v }, t)));
+  const ordenar = h("select", { "aria-label": "Ordenar proyectos" }, h("option", { value: "recientes" }, "Más recientes"), h("option", { value: "nombre" }, "Nombre A–Z"), h("option", { value: "clips" }, "Más clips"));
+  const normalizarBusqueda = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  function pintarBiblioteca() {
+    const texto = normalizarBusqueda(buscar.value);
+    const proyectos = biblioteca.filter(p => normalizarBusqueda(p.nombre).includes(texto) && (!filtro.value || (filtro.value === "procesando" ? ACTIVOS.includes(p.estado) : p.estado === filtro.value)));
+    proyectos.sort((a,b) => ordenar.value === "nombre" ? a.nombre.localeCompare(b.nombre) : ordenar.value === "clips" ? (b.n_clips || 0) - (a.n_clips || 0) : b.creado - a.creado);
+    conteo.textContent = `${proyectos.length} de ${biblioteca.length}`;
+    resumen.replaceChildren(...[[biblioteca.length, "proyectos"], [biblioteca.filter(p => p.estado === "listo").length, "listos para editar"], [biblioteca.reduce((n,p) => n + (p.n_clips || 0), 0), "clips"], [biblioteca.filter(p => ACTIVOS.includes(p.estado)).length, "en proceso"]].map(([n,t]) => h("div", {}, h("strong", {}, n), h("span", {}, t))));
+    lista.replaceChildren(...(proyectos.length ? proyectos.map(tarjeta) : [h("div", { class: "panel vacio" }, h("strong", {}, biblioteca.length ? "No hay coincidencias" : "Tu biblioteca empieza aquí"), h("p", {}, biblioteca.length ? "Prueba otro nombre o estado." : "Importa un video o conecta un directo para crear tu primer clip."))]));
+  }
+  buscar.addEventListener("input", pintarBiblioteca);
+  filtro.addEventListener("change", pintarBiblioteca);
+  ordenar.addEventListener("change", pintarBiblioteca);
   const lista = h("div", { class: "lista-proyectos", "aria-labelledby": "titulo-proyectos" });
   const conteo = h("span", { class: "conteo-proyectos" });
   const selIdioma = () => h("select", { "aria-label": "Idioma del video" }, IDIOMAS.map(([v, t]) => h("option", { value: v }, t)));
@@ -314,11 +334,9 @@ function vistaProyectos() {
   vista.append(
     h("header", { class: "portada portada-proyectos" },
       h("div", { class: "portada-texto" },
-        h("h1", {}, "Convierte tus videos en clips verticales"),
-        h("p", { class: "tenue" }, "Importa un video para generar clips con subtítulos. El procesamiento se hace en tu equipo.")),
-      h("div", { class: "composicion", "aria-hidden": "true" },
-        h("div", { class: "composicion-fuente" }, h("div", { class: "composicion-pista" })),
-        h("div", { class: "composicion-clip" }, h("div", { class: "composicion-subtitulos" })))),
+        h("h1", {}, "Estudio de clips"),
+        h("p", { class: "tenue" }, "Tu biblioteca, tus directos y tus próximas publicaciones.")),
+      h("a", { class: "boton", href: "#/vivo" }, "Capturar un directo")), resumen,
     h("section", { class: "importacion", "aria-labelledby": "titulo-importacion" },
       h("h2", { id: "titulo-importacion", class: "titulo-lista" }, "Nuevo proyecto"),
       h("div", { class: "nuevo" },
@@ -338,22 +356,22 @@ function vistaProyectos() {
       h("div", { class: "fila ajuste-inicial" }, h("strong", {}, "Duración de los clips sugeridos"), minClip, "a", maxClip, "s")),
     h("div", { class: "cabecera-lista" },
       h("h2", { id: "titulo-proyectos", class: "titulo-lista" }, "Tus proyectos"), conteo),
-    lista);
+    h("div", { class: "biblioteca-herramientas" }, buscar, filtro, ordenar), lista);
 
   async function refrescar() {
     const proyectos = await intentar(() => api("GET", "/proyectos"));
     if (!proyectos || !lista.isConnected) return;
-    conteo.textContent = proyectos.length;
-    lista.replaceChildren(...(proyectos.length ? proyectos.map(tarjeta) : [
-      h("div", { class: "panel vacio" }, h("span", { class: "icono icono-proyectos", "aria-hidden": "true" }),
-        h("strong", {}, "Todavía no hay proyectos"), h("p", {}, "Importa un archivo o un enlace para empezar."))]));
+    const clave = JSON.stringify(proyectos);
+    if (clave === ultimaLista) return;
+    ultimaLista = clave; biblioteca = proyectos;
+    pintarBiblioteca();
   }
 
   function tarjeta(p) {
     const activo = ACTIVOS.includes(p.estado);
     const accion = (texto, fn, clase = "") => h("button", { class: clase, onclick: async () => { await intentar(fn); refrescar(); } }, texto);
     return h("article", { class: "panel proyecto" },
-      h("span", { class: "icono icono-video", "aria-hidden": "true" }),
+      p.estado === "listo" ? h("img", { class: "proyecto-miniatura", src: `/api/proyectos/${p.id}/miniatura.jpg`, alt: "", loading: "lazy", onerror: e => { e.target.hidden = true; } }) : h("div", { class: "proyecto-miniatura pendiente" }, h("span", { class: "icono icono-video", "aria-hidden": "true" })),
       h("div", { class: "proyecto-datos" },
         h("h3", {}, p.nombre),
         h("div", { class: "fila pequeno tenue", style: "margin-top:4px" },
@@ -959,7 +977,7 @@ async function vistaEditor(pid, miGeneracion) {
         velocidad, duracionClip, guardado),
       h("details", { class: "atajos-editor" }, h("summary", {}, "Atajos de teclado"),
         h("p", { class: "tenue pequeno" }, "Espacio: reproducir o pausar · ←/→: mover 1 s · I/O: fijar inicio o fin")),
-      h("div", { class: "linea-tiempo" }, h("h3", {}, "Línea de tiempo"), barra),
+      h("div", { class: "linea-tiempo" }, h("h3", {}, "Línea de tiempo"), barra, crearOnda({ h, clip, video })),
       h("div", { class: "tiempos" },
         h("div", {}, h("label", {}, "Inicio"), h("div", { class: "fila" }, entradaInicio, ajuste("inicio", -0.5), ajuste("inicio", 0.5)), h("div", { style: "margin-top:5px" }, aqui("inicio"))),
         h("div", {}, h("label", {}, "Fin"), h("div", { class: "fila" }, entradaFin, ajuste("fin", -0.5), ajuste("fin", 0.5)), h("div", { style: "margin-top:5px" }, aqui("fin")))));
@@ -1260,6 +1278,22 @@ async function vistaEditor(pid, miGeneracion) {
           const cobertura = r.cobertura == null ? "" : ` Rostro detectado en el ${Math.round(r.cobertura * 100)} % de las muestras.`;
           avisar("Seguimiento del rostro activado." + cobertura);
         } }, "Seguir el rostro"),
+        h("button", { onclick: async (event) => {
+          const boton = event.currentTarget;
+          boton.disabled = true;
+          boton.textContent = "Analizando planos…";
+          try {
+            const r = await operar("encuadre-planos", ["recorte_x", "encuadre", "trayectoria"]);
+            if (!r || !vigente()) return;
+            if (!r.detectado) return avisar("No se encontraron rostros suficientes en los planos. Puedes usar el seguimiento clásico o ajustar el recorte.");
+            ajustarVideo(); pintarDerecha();
+            avisar(`Seguimiento por planos activado. ${r.planos} plano(s) analizado(s).`);
+          } finally {
+            boton.disabled = false;
+            boton.textContent = "Seguir por planos";
+          }
+        } }, "Seguir por planos"),
+        h("p", { class: "ayuda" }, "Analiza todos los planos con muestreo adaptado a las tomas. Hasta 10 minutos por clip."),
         clip.trayectoria?.length ? h("button", { onclick: () => {
           guardar({ seguimiento: false }); ajustarVideo(); pintarDerecha();
         } }, "Usar encuadre fijo") : null,
@@ -1414,12 +1448,13 @@ async function vistaEditor(pid, miGeneracion) {
   }
 
   function panelExportar() {
+    const entregaUI = crearEntrega({ h, api, clip, video, vaciar, avisar, vigente });
     const exportar = h("button", { class: "primario", disabled: !clip, onclick: async () => {
       const id = clip.id;
       exportar.disabled = true;
       // Primero se guarda todo; si falla, no se exporta una version anterior.
       if (!(await vaciar())) { exportar.disabled = false; return avisar(AVISO_GUARDADO, "error"); }
-      const e = await intentar(() => api("POST", `/clips/${id}/exportar`));
+      const e = await intentar(() => api("POST", `/clips/${id}/exportar`, entregaUI.opciones()));
       exportar.disabled = false;
       if (e) { proyecto.exportaciones.unshift(e); pintarDerecha(); }
     } }, "Exportar este clip a MP4");
@@ -1446,7 +1481,7 @@ async function vistaEditor(pid, miGeneracion) {
       if (!confirm(`Se exportarán los ${n} clips del proyecto, uno tras otro. ¿Continuar?`)) return;
       todos.disabled = true;
       if (!(await vaciar())) { todos.disabled = false; return avisar(AVISO_GUARDADO, "error"); }
-      const p = await intentar(() => api("POST", `/proyectos/${pid}/exportar-todos`, {}));
+      const p = await intentar(() => api("POST", `/proyectos/${pid}/exportar-todos`, entregaUI.opciones()));
       todos.disabled = false;
       if (p) { proyecto.exportaciones = p.exportaciones; pintarDerecha(); avisar(`${p.encolados} exportaciones en cola.`); }
     } }, `Exportar todos (${proyecto.clips.length})`);
@@ -1470,9 +1505,10 @@ async function vistaEditor(pid, miGeneracion) {
           } }, "Eliminar") : null));
     });
     return h("div", {},
+      entregaUI.panel,
       h("div", { class: "fila", style: "margin-bottom:6px" }, exportar, descargarSrt, todos,
         h("button", { onclick: () => intentar(() => api("POST", `/proyectos/${pid}/abrir-carpeta`)) }, "Abrir carpeta")),
-      h("p", { class: "tenue pequeno" }, "Salida: 1080×1920, H.264 + AAC, con los subtítulos incrustados." +
+      h("p", { class: "tenue pequeno" }, "MP4 H.264 + AAC con los subtítulos del clip." +
         (proyecto.exportaciones.length ? ` ${listas} lista(s)` + (enCurso ? `, ${enCurso} en curso o en cola.` : ".") : "")),
       h("div", { class: "desplazable" }, items.length ? items : h("p", { class: "tenue" }, "Aún no has exportado ningún clip.")));
   }

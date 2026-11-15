@@ -1,0 +1,101 @@
+/* Espacio de trabajo Windows. Conserva los controles y la tipografia del sistema. */
+:root {
+  --fondo: #0c1119; --panel: #141c28; --panel-2: #1a2534; --panel-3: #243347;
+  --texto: #eef3f9; --tenue: #9aaac0; --borde: #2a384b; --borde-fuerte: #506580;
+  --acento: #c4a5ff; --acento-suave: #c4a5ff16; --acento-texto: #25133f;
+  --radio: 16px; --radio-ctl: 9px;
+}
+body.studio { background: var(--fondo); }
+.studio .barra { position: fixed; left: 0; top: 0; bottom: 0; width: 192px; height: 100dvh; padding: 28px 18px; display: flex; flex-direction: column; align-items: stretch; gap: 36px; background: #101721; border: 0; border-right: 1px solid var(--borde); z-index: 10; }
+.studio .marca { font-size: 19px; letter-spacing: -.5px; }
+.studio .marca-icono { background: var(--acento); }
+.studio .barra nav { display: grid; gap: 8px; }
+.studio .barra nav a { padding: 12px; border: 1px solid transparent; border-radius: 10px; display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.studio .barra nav a[aria-current] { color: var(--acento); background: var(--acento-suave); border-color: #c4a5ff35; }
+.studio .estado-sistema { margin: auto 0 0; border: 0; border-top: 1px solid var(--borde); border-radius: 0; padding: 14px 0 0; font-size: 11px; line-height: 1.7; background: transparent; white-space: normal; }
+.studio main { margin-left: 192px; padding: 34px 30px 64px; width: calc(100% - 192px); max-width: 1800px; }
+.studio h1 { font-size: clamp(25px, 2.4vw, 37px); letter-spacing: -1.2px; font-weight: 650; line-height: 1.2; }
+.studio .portada-proyectos { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0; margin: 0 0 26px; min-height: 90px; background: none; border: 0; box-shadow: none; }
+.studio .portada p { margin-top: 10px; max-width: 62ch; }
+.resumen-biblioteca { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 28px; }
+.resumen-biblioteca > div { padding: 16px 20px; background: var(--panel); border: 1px solid var(--borde); border-radius: 12px; display: grid; gap: 4px; }
+.resumen-biblioteca strong { font-size: 27px; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--texto); }
+.resumen-biblioteca span { color: var(--tenue); font-size: 12px; }
+.studio .titulo-lista { color: var(--texto); text-transform: none; font-size: 18px; letter-spacing: -.3px; font-weight: 600; }
+.studio .nuevo { gap: 16px; }
+.studio .fuente { border-color: var(--borde); box-shadow: none; }
+.studio .fuente-cabecera { padding-bottom: 12px; }
+.studio .soltar { min-height: 130px; border-style: dashed; background: #0c111955; }
+.studio .soltar.encima { background: var(--acento-suave); border-color: var(--acento); }
+.studio .ajuste-inicial { background: transparent; padding: 16px 0 0; }
+.studio .cabecera-lista { margin-top: 34px; }
+.biblioteca-herramientas { display: grid; grid-template-columns: minmax(180px,1fr) 190px 150px; gap: 12px; margin-bottom: 18px; }
+.biblioteca-herramientas input { width: 100%; }
+.studio .lista-proyectos { display: grid; grid-template-columns: repeat(auto-fill, minmax(275px, 1fr)); gap: 18px; }
+.studio .proyecto { display: flex; flex-direction: column; padding: 0; overflow: hidden; gap: 0; background: var(--panel); border: 1px solid var(--borde); box-shadow: 0 5px 18px #0002; transition: border-color .2s, transform .2s; }
+.studio .proyecto:hover { border-color: var(--borde-fuerte); transform: translateY(-2px); }
+.proyecto-miniatura { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--panel-2); display: block; }
+.proyecto-miniatura.pendiente { display: grid; place-content: center; color: var(--tenue); }
+.proyecto-miniatura.pendiente .icono { width: 32px; height: 32px; }
+.studio .proyecto-datos { padding: 16px 16px 8px; width: 100%; }
+.studio .proyecto h3 { color: var(--texto); font-size: 14px; line-height: 1.45; text-transform: none; min-height: 42px; margin-bottom: 9px; }
+.studio .proyecto-acciones { margin-top: auto; width: 100%; padding: 10px 16px 16px; justify-content: space-between; }
+.studio .proyecto-acciones .boton { background: var(--acento); color: var(--acento-texto); border-color: var(--acento); font-weight: 600; }
+.studio .proyecto-datos > p.tenue { display: none; }
+.studio .vacio { grid-column: 1 / -1; padding: 50px 20px; text-align: center; }
+.studio .editor-cabecera { margin-bottom: 22px; }
+.studio .editor-cabecera h1 { font-size: 21px; letter-spacing: -.5px; }
+.studio .editor { grid-template-columns: minmax(175px, .6fr) minmax(300px, 1.15fr) minmax(310px, 1fr); gap: 20px; align-items: start; }
+.studio .panel-clips, .studio .inspector { padding: 16px; box-shadow: none; }
+.studio .clip-item { border-radius: 10px; padding: 13px; margin-bottom: 8px; }
+.studio .clip-item.activo { background: var(--acento-suave); border-color: var(--acento); box-shadow: inset 3px 0 var(--acento); }
+.studio .centro { background: #0a0e15; border: 1px solid var(--borde); border-radius: 18px; padding: 16px 12px; }
+.studio .telefono { max-width: 280px; border-radius: 14px; box-shadow: 0 18px 36px #0006; }
+.studio .pestanas { padding: 5px; border-radius: 12px; background: var(--fondo); gap: 3px; }
+.studio .pestanas button { padding: 8px 9px; font-size: 12px; }
+.studio .pestanas button.activa { background: var(--panel-3); color: var(--acento); border-color: var(--borde-fuerte); }
+.studio .controles { width: 100%; }
+.studio .transporte { gap: 7px; }
+.studio .transporte button { font-size: 12px; }
+.onda-editor { position: relative; height: 65px; margin-top: 10px; border: 1px solid var(--borde); border-radius: 8px; background: #101b26; overflow: hidden; }
+.onda-editor img { width: 100%; height: 100%; object-fit: fill; opacity: .7; }
+.onda-posicion { position: absolute; inset: 0; width: 100%; height: 100% !important; margin: 0; opacity: .45; cursor: crosshair; }
+.onda-editor span { position: absolute; left: 8px; top: 8px; pointer-events: none; }
+.entrega-panel { display: grid; gap: 12px; padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid var(--borde); }
+.entrega-panel h3 { margin: 0; }
+.entrega-panel select { width: 100%; margin-top: 6px; }
+.entrega-panel p { margin: 0; }
+.revision-salida:not(:empty) { display: grid; gap: 7px; background: var(--fondo); padding: 12px; border-radius: 9px; }
+.aviso-calidad { color: #f4be76; font-size: 12px; }
+.portada-selector summary { cursor: pointer; color: var(--acento); }
+.portada-selector > * { margin-top: 12px; }
+.portada-preview { display: block; width: 130px; max-height: 235px; border-radius: 10px; border: 1px solid var(--borde); }
+.studio .cuadricula-vivo { gap: 20px; }
+.studio .panel-grabando { border-top: 3px solid var(--acento); }
+.studio .volumen-vivo { border-radius: 10px; }
+.studio .momento { border-radius: 12px; padding: 14px; }
+.conexion-vivo { padding: 12px 16px; border: 1px solid #f4be76; color: #f4be76; border-radius: 10px; margin-bottom: 18px; }
+.studio .actualizacion-panel { left: 10px; right: auto; max-width: min(420px, calc(100vw - 30px)); }
+@media (max-width: 1280px) {
+  .studio .editor { grid-template-columns: 170px minmax(280px,1fr); }
+  .studio .inspector { grid-column: 1 / -1; }
+  .studio .telefono { max-width: 240px; }
+}
+@media (max-width: 1050px) {
+  .studio .barra { position: relative; width: 100%; height: auto; min-height: 72px; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 16px 20px; gap: 20px; border-right: 0; border-bottom: 1px solid var(--borde); }
+  .studio .barra nav { display: flex; flex-wrap: wrap; gap: 5px; }
+  .studio .barra nav a { padding: 8px 10px; }
+  .studio .estado-sistema { margin: 0 0 0 auto; border: 0; padding: 0; }
+  .studio main { width: 100%; margin: 0; padding: 25px 20px 50px; }
+}
+@media (max-width: 720px) {
+  .resumen-biblioteca { grid-template-columns: repeat(2,1fr); }
+  .biblioteca-herramientas { grid-template-columns: 1fr 1fr; }
+  .biblioteca-herramientas input { grid-column: 1 / -1; }
+  .studio .portada-proyectos { align-items: start; flex-direction: column; }
+  .studio .editor { grid-template-columns: 1fr; }
+  .studio .inspector { grid-column: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio *, .studio *::before, .studio *::after { transition: none !important; animation: none !important; }
+}

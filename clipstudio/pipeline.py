@@ -528,6 +528,8 @@ def exportar(exportacion_id: str, cancel: Cancelacion) -> None:
             conservar=conservar, tiene_audio=info["tiene_audio"],
             trayectoria=clip.get("trayectoria") or [],
             composicion=clip.get("composicion") or {},
+            perfil=(clip.get("entrega") or {}).get("perfil", "social"),
+            normalizar_audio=(clip.get("entrega") or {}).get("normalizar_audio", False),
         )
         final = carpeta / f"{exportacion_id}.mp4"
         temporal.replace(final)
