@@ -9,6 +9,16 @@ análisis y las propuestas iniciales se conservan como referencias históricas.
 
 ## Situación actual
 
+### Versión 0.3.5
+
+Corregido el cierre durante la actualización. La señal de instalación sobrevive al
+lanzamiento del instalador y el proceso devuelve el código que espera la ventana.
+El instalador cierra también ventanas de versiones anteriores que esperan confirmación.
+La interfaz guarda los cambios antes de instalar y evita avisos repetidos de conexión
+durante ese cierre. Se verificó una reproducción de 0.2.3 con instalador precargado y
+datos aislados, que se actualizó a 0.3.5 y conservó el proyecto. Regresión de 383 pruebas
+aprobadas y una omitida.
+
 ### Versión 0.3.4
 
 Publicada como actualización estable con instalador Windows y archivo SHA-256.
