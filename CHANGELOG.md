@@ -4,6 +4,19 @@ Formato de entradas por versión, con lo añadido, lo corregido y lo que se sabe
 que falta. El detalle técnico y las pruebas de cada función están en
 [docs/estado.md](docs/estado.md).
 
+## 0.4.0 — 2026-11-15
+
+- Análisis por planos en segundo plano con progreso, cancelación y recuperación de tomas
+  completadas al reintentar. Una edición concurrente impide aplicar resultados antiguos.
+- Historial persistente de las últimas 50 ediciones por clip, con Deshacer y Rehacer.
+  Borradores locales recuperables y control de revisión para evitar sobrescrituras.
+- Composición Stream por intervalos entre cámara, gameplay y mixto, compartida por
+  vista previa y exportación. Protección manual del HUD mediante ampliación del recorte.
+- Revisión de legibilidad con avisos de duración, velocidad, ancho estimado, solapamiento
+  y subtítulos que atraviesan cortes.
+- Búsqueda de momentos por palabras del tema en la transcripción, con creación de clips.
+- Sugerencias de títulos extraídas del texto conservado del clip y aplicables con un clic.
+
 ## 0.3.5 — 2026-11-15
 
 - La señal de instalación permanece disponible después de lanzar el instalador,

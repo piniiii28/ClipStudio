@@ -5,6 +5,7 @@ import { vistaVivo } from "./vivo.js";
 import { vistaAjustes } from "./ajustes.js";
 import { crearSelectorStream, dibujarStream } from "./encuadre-stream.js";
 import { crearEntrega, crearOnda } from "./entrega.js";
+import { crearAyudasEditoriales } from "./editorial.js";
 import { iniciarActualizaciones } from "./actualizaciones.js";
 
 const vista = document.getElementById("vista");
@@ -58,7 +59,11 @@ async function api(metodo, ruta, cuerpo) {
   }
   if (resp.status === 204) return null;
   const datos = await resp.json().catch(() => null);
-  if (!resp.ok) throw new Error(mensajeError(datos, resp.status));
+  if (!resp.ok) {
+    const error = new Error(mensajeError(datos, resp.status));
+    error.status = resp.status;
+    throw error;
+  }
   return datos;
 }
 
@@ -447,6 +452,10 @@ async function vistaEditor(pid, miGeneracion) {
   const listaClips = h("div", { class: "lista-clips" });
   const panelDerecho = h("div", {});
   const controles = h("div", { class: "controles" });
+  const estadoAnalisis = h("div", { class: "estado-analisis", role: "status" });
+  const recuperacion = h("div", { class: "recuperacion" });
+  const historialUI = h("div", { class: "fila" });
+  const conflictos = new Set();
   const guardado = h("span", { class: "tenue pequeno", role: "status" });
   const velocidad = h("select", { "aria-label": "Velocidad de reproducción de la vista previa" },
     [0.5, 0.75, 1, 1.25, 1.5, 2].map((tasa) =>
@@ -493,18 +502,28 @@ async function vistaEditor(pid, miGeneracion) {
 
   async function enviarCambios(id, cambios) {
     guardado.textContent = "Guardando…";
-    const nuevo = await intentar(() => api("PATCH", `/clips/${id}`, cambios));
+    const local = proyecto.clips.find((c) => c.id === id);
+    let nuevo;
+    try {
+      if (conflictos.has(id)) throw new Error("Recupera o descarta el borrador antes de guardar.");
+      nuevo = await api("PATCH", `/clips/${id}`, { ...cambios, revision: local?.revision ?? 0 });
+    } catch (error) {
+      if (error.status === 409) conflictos.add(id);
+      avisar(error.message, "error");
+    }
     if (esRango(cambios)) rangosActivos -= 1;
     enCola.set(id, enCola.get(id) - 1);
     if (!nuevo) {
       // Fallo: los cambios vuelven a los pendientes de SU clip, sin pisar ediciones posteriores.
       pendientes.set(id, { ...cambios, ...(pendientes.get(id) || {}) });
-      if (!cancelado) { guardado.textContent = "No se guardó"; actualizarBloqueo(); }
+      if (!cancelado) { guardado.textContent = "No se guardó"; actualizarBloqueo(); pintarRecuperacion(); }
       return false;
     }
     if (cancelado) return true;
     guardado.textContent = "Guardado";
-    const local = proyecto.clips.find((c) => c.id === id);
+    if (local) for (const k of ["revision", "historial_pos", "historial_fin"]) local[k] = nuevo[k];
+    if (!pendientes.has(id) && !enCola.get(id)) borrarBorrador(id);
+    pintarHistorial();
     const hayMasNuevos = "subtitulos" in (pendientes.get(id) || {}) || enCola.get(id) > 0;
     // Los subtitulos que devuelve el servidor (recortados, ordenados o completados al mover
     // los limites) se adoptan siempre que no haya una edicion local de subtitulos mas nueva.
@@ -513,6 +532,7 @@ async function vistaEditor(pid, miGeneracion) {
       local.subtitulos = nuevo.subtitulos;
       if (cambio && clip && clip.id === id && pestana === "subtitulos") pintarDerecha();
     }
+    if (local && esRango(cambios)) local.composicion = nuevo.composicion;
     if (esRango(cambios) && clip?.id === id && pestana === "aspecto") { ajustarVideo(); pintarDerecha(); }
     actualizarBloqueo();
     pintarClips();
@@ -546,6 +566,8 @@ async function vistaEditor(pid, miGeneracion) {
     if (esRango(cambios) || "recorte_x" in cambios || cambios.seguimiento === false) clip.trayectoria = [];
     Object.assign(clip, cambios);
     pendientes.set(clip.id, { ...(pendientes.get(clip.id) || {}), ...cambios });
+    try { localStorage.setItem("clipstudio.borrador." + clip.id, JSON.stringify({ revision: clip.revision ?? 0, cambios: { ...(JSON.parse(localStorage.getItem("clipstudio.borrador." + clip.id))?.cambios || {}), ...pendientes.get(clip.id) } })); }
+    catch { avisar("No se pudo crear el borrador de recuperación.", "error"); }
     clearTimeout(reloj);
     reloj = setTimeout(encolarPendiente, 450);
     actualizarBloqueo();
@@ -563,6 +585,8 @@ async function vistaEditor(pid, miGeneracion) {
       const nuevo = r.clip || r;
       const local = proyecto.clips.find((c) => c.id === id);
       if (local) for (const k of campos) local[k] = nuevo[k];
+      if (local && nuevo.id === id) for (const k of ["revision", "historial_pos", "historial_fin"]) local[k] = nuevo[k];
+      pintarHistorial();
       return r;
     } finally {
       operaciones -= 1;
@@ -570,6 +594,67 @@ async function vistaEditor(pid, miGeneracion) {
     }
   }
   const AVISO_GUARDADO = "No se pudieron guardar los últimos cambios. Vuelve a intentarlo.";
+
+  function borrarBorrador(id) {
+    try { localStorage.removeItem("clipstudio.borrador." + id); } catch { /* almacenamiento no disponible */ }
+  }
+  function pintarRecuperacion() {
+    recuperacion.replaceChildren();
+    if (!clip) return;
+    let borrador;
+    try { borrador = JSON.parse(localStorage.getItem("clipstudio.borrador." + clip.id)); } catch { return; }
+    if (!borrador || (pendientes.has(clip.id) && !conflictos.has(clip.id))) return;
+    const id = clip.id;
+    const resolver = async (restaurar) => {
+      await cadena;
+      const actual = await intentar(() => api("GET", `/clips/${id}`));
+      if (!actual || clip?.id !== id) return;
+      pendientes.delete(id); conflictos.delete(id); borrarBorrador(id);
+      Object.assign(clip, actual);
+      if (restaurar) {
+        const campos = ["titulo", "inicio", "fin", "encuadre", "recorte_x", "subtitulos", "estilo", "cortes", "composicion", "tiktok"];
+        guardar(Object.fromEntries(campos.filter(k => k in borrador.cambios).map(k => [k, borrador.cambios[k]])));
+      }
+      pintarTodo();
+    };
+    recuperacion.append(h("p", {}, "Hay cambios locales sin confirmar. Puedes recuperarlos sobre la versión guardada."),
+      h("button", { onclick: () => resolver(true) }, "Recuperar borrador"),
+      h("button", { onclick: () => resolver(false) }, "Descartar borrador"));
+  }
+  async function moverHistorial(accion) {
+    if (!clip || operaciones) return;
+    const id = clip.id, local = clip;
+    operaciones += 1; actualizarBloqueo(); pintarHistorial();
+    try {
+      if (!(await vaciar())) return;
+      const actual = await intentar(() => api("POST", `/clips/${id}/historial/${accion}`, { revision: local.revision ?? 0 }));
+      if (actual && clip?.id === id) { Object.assign(clip, actual); pintarTodo(); }
+    } finally { operaciones -= 1; actualizarBloqueo(); pintarHistorial(); }
+  }
+  function pintarHistorial() {
+    historialUI.replaceChildren(
+      h("button", { disabled: !clip || !clip.historial_pos || operaciones > 0, onclick: () => moverHistorial("deshacer") }, "Deshacer"),
+      h("button", { disabled: !clip || !(clip.historial_fin > clip.historial_pos) || operaciones > 0, onclick: () => moverHistorial("rehacer") }, "Rehacer"));
+  }
+  async function iniciarAnalisis() {
+    if (!clip || !(await vaciar())) return;
+    const trabajo = await intentar(() => api("POST", `/clips/${clip.id}/analisis-planos`));
+    if (!trabajo || cancelado) return;
+    proyecto.analisis = [trabajo, ...(proyecto.analisis || []).filter(a => a.id !== trabajo.id)];
+    pintarAnalisis();
+  }
+  function pintarAnalisis() {
+    estadoAnalisis.replaceChildren();
+    const trabajo = (proyecto.analisis || []).find(a => a.clip_id === clip?.id);
+    if (!trabajo) return;
+    const activo = ACTIVOS.includes(trabajo.estado);
+    estadoAnalisis.replaceChildren(h("div", {}, h("p", {}, trabajo.error || trabajo.mensaje || ESTADOS[trabajo.estado]),
+      activo ? h("progress", { max: 100, value: trabajo.progreso, "aria-label": "Progreso del análisis" }) : null,
+      activo ? h("button", { onclick: async () => { await intentar(() => api("POST", `/analisis/${trabajo.id}/cancelar`)); await sondear(); } }, "Cancelar análisis") : null,
+      ["error", "cancelado"].includes(trabajo.estado) ? h("button", { onclick: iniciarAnalisis }, "Reintentar análisis") : null));
+  }
+  const ayudas = crearAyudasEditoriales({ h, api, avisar, getClip: () => clip, pid, video, vaciar,
+    guardar, repintar: () => pintarTodo(), crearClip: (nuevo) => { proyecto.clips.push(nuevo); elegirClip(nuevo); } });
 
   const cortesDel = (c = clip) => c?.cortes || [];
   const segundosQuitados = (c = clip) => cortesDel(c).reduce((n, t) => n + Math.max(0, Math.min(c.fin, t.fin) - Math.max(c.inicio, t.inicio)), 0);
@@ -931,6 +1016,9 @@ async function vistaEditor(pid, miGeneracion) {
   }
 
   function atajoEditor(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.target.closest("input, textarea, [contenteditable]")) {
+      e.preventDefault(); moverHistorial(e.shiftKey ? "rehacer" : "deshacer"); return;
+    }
     if (!clip || operaciones || e.defaultPrevented || e.isComposing || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
     if (e.target.closest("input, textarea, select, button, a, [role=button], [contenteditable]")) return;
     const tecla = e.key.toLowerCase();
@@ -1075,6 +1163,7 @@ async function vistaEditor(pid, miGeneracion) {
           if (!confirm("Se reemplazarán los subtítulos de este clip por los de la transcripción. ¿Continuar?")) return;
           if (await operar("subtitulos/regenerar", ["subtitulos"])) pintarDerecha();
         } }, "Regenerar")),
+      ayudas.revision(),
       filas.length ? h("div", { class: "desplazable" }, filas)
         : h("p", { class: "tenue" }, "Este clip no tiene subtítulos. Añade uno o regenera desde la transcripción."));
   }
@@ -1228,7 +1317,7 @@ async function vistaEditor(pid, miGeneracion) {
       // Se actualizan los mismos objetos de clip para no perder la seleccion actual.
       for (const nuevo of p.clips) {
         const local = proyecto.clips.find((c) => c.id === nuevo.id);
-        if (local) { local.estilo = nuevo.estilo; local.encuadre = nuevo.encuadre; local.composicion = nuevo.composicion; }
+        if (local) { local.estilo = nuevo.estilo; local.encuadre = nuevo.encuadre; local.composicion = nuevo.composicion; local.revision = nuevo.revision; local.historial_pos = nuevo.historial_pos; local.historial_fin = nuevo.historial_fin; }
       }
       pintarClips(); ajustarVideo();
       avisar(`Estilo aplicado a ${p.aplicados} clip(s).`);
@@ -1244,7 +1333,7 @@ async function vistaEditor(pid, miGeneracion) {
           if (!r.detectado) return avisar("No se detectó la cámara. Puedes marcarla sobre la imagen.");
           ajustarVideo(); pintarDerecha();
         } });
-      bloqueStream = selector.elemento;
+      bloqueStream = h("div", {}, selector.elemento, ayudas.intervalos());
       pintarStream();
     }
     const otros = Math.max(0, proyecto.clips.length - 1);
@@ -1279,21 +1368,7 @@ async function vistaEditor(pid, miGeneracion) {
           const cobertura = r.cobertura == null ? "" : ` Rostro detectado en el ${Math.round(r.cobertura * 100)} % de las muestras.`;
           avisar("Seguimiento del rostro activado." + cobertura);
         } }, "Seguir el rostro"),
-        h("button", { onclick: async (event) => {
-          const boton = event.currentTarget;
-          boton.disabled = true;
-          boton.textContent = "Analizando planos…";
-          try {
-            const r = await operar("encuadre-planos", ["recorte_x", "encuadre", "trayectoria"]);
-            if (!r || !vigente()) return;
-            if (!r.detectado) return avisar("No se encontraron rostros suficientes en los planos. Puedes usar el seguimiento clásico o ajustar el recorte.");
-            ajustarVideo(); pintarDerecha();
-            avisar(`Seguimiento por planos activado. ${r.planos} plano(s) analizado(s).`);
-          } finally {
-            boton.disabled = false;
-            boton.textContent = "Seguir por planos";
-          }
-        } }, "Seguir por planos"),
+        h("button", { onclick: iniciarAnalisis }, "Seguir por planos"),
         h("p", { class: "ayuda" }, "Analiza todos los planos con muestreo adaptado a las tomas. Hasta 10 minutos por clip."),
         clip.trayectoria?.length ? h("button", { onclick: () => {
           guardar({ seguimiento: false }); ajustarVideo(); pintarDerecha();
@@ -1516,6 +1591,8 @@ async function vistaEditor(pid, miGeneracion) {
 
   function pintarTodo() {
     pintarClips(); pintarControles(); pintarDerecha(); ajustarVideo();
+    pintarHistorial(); pintarRecuperacion(); pintarAnalisis();
+    titulosUI.replaceChildren(ayudas.titulos());
     titulo.value = clip ? clip.titulo : "";
     titulo.disabled = !clip;
     duplicar.disabled = !clip || operaciones > 0;
@@ -1523,13 +1600,27 @@ async function vistaEditor(pid, miGeneracion) {
 
   // --- sondeo de exportaciones ---
   async function sondear() {
-    if (!proyecto.exportaciones.some((e) => ACTIVOS.includes(e.estado))) return;
+    if (!proyecto.exportaciones.some((e) => ACTIVOS.includes(e.estado)) && !(proyecto.analisis || []).some(a => ACTIVOS.includes(a.estado))) return;
     const lista = proyecto.exportaciones, cuantas = lista.length;
     const p = await api("GET", `/proyectos/${pid}`).catch(() => null);
     if (!p || cancelado) return;
     // Si la lista cambio mientras llegaba la respuesta (nueva exportacion, borrado, otro
     // proyecto cargado), esta respuesta es antigua: se espera al siguiente sondeo.
     if (proyecto.exportaciones !== lista || lista.length !== cuantas) return;
+    const analisisAntes = proyecto.analisis || [];
+    proyecto.analisis = p.analisis || [];
+    for (const a of proyecto.analisis) {
+      const previo = analisisAntes.find(x => x.id === a.id);
+      if (previo && ACTIVOS.includes(previo.estado) && !ACTIVOS.includes(a.estado)) {
+        const local = proyecto.clips.find(c => c.id === a.clip_id);
+        const nuevo = p.clips.find(c => c.id === a.clip_id);
+        if (a.estado === "listo" && local && nuevo && !pendientes.has(local.id) && !enCola.get(local.id) && (local.revision ?? 0) === previo.parametros.revision) {
+          Object.assign(local, nuevo);
+          if (clip?.id === local.id) pintarTodo();
+        }
+      }
+    }
+    pintarAnalisis();
     const antes = JSON.stringify(proyecto.exportaciones);
     proyecto.exportaciones = p.exportaciones;
     if (pestana === "exportar" && antes !== JSON.stringify(p.exportaciones)) pintarDerecha();
@@ -1595,6 +1686,7 @@ async function vistaEditor(pid, miGeneracion) {
     proponer.disabled = false;
     if (p) { proyecto = p; elegirClip(p.clips[0] || null); avisar("Propuestas actualizadas."); }
   } }, "Volver a proponer");
+  const titulosUI = h("div", {});
   const titulo = h("input", { class: "crece", maxLength: 120, "aria-label": "Título del clip" });
   titulo.addEventListener("input", () => { if (clip && titulo.value.trim()) { guardar({ titulo: titulo.value.trim() }); } });
 
@@ -1607,6 +1699,7 @@ async function vistaEditor(pid, miGeneracion) {
           h("div", { class: "botones-columna" }, nuevoClip, duplicar, borrarClip),
           h("div", { class: "grupo" },
             h("h3", {}, "Proponer clips"),
+            ayudas.tema(() => ({ min_s: Number(minS.value), max_s: Number(maxS.value) })),
             h("div", { class: "fila pequeno" }, "Entre", minS, "y", maxS, "s", proponer),
             h("p", { class: "tenue pequeno" }, "Se eligen por pausas, cierres de frase, ritmo del habla y picos de volumen. No miden interés ni predicen resultados.")),
           h("div", { class: "grupo" },
@@ -1617,7 +1710,7 @@ async function vistaEditor(pid, miGeneracion) {
         h("div", { class: "monitor-cabecera" }, tituloPrevio, h("div", { class: "fila" }, mostrarGuia, h("span", { class: "etiqueta" }, "9:16"))),
         h("div", { class: "monitor" }, telefono),
         h("label", { class: "titulo-clip" }, "Título del clip", titulo),
-        controles),
+        historialUI, recuperacion, estadoAnalisis, titulosUI, controles),
       h("section", { class: "panel inspector", "aria-label": "Ajustes del clip" }, panelDerecho)));
 
   video.addEventListener("loadedmetadata", () => { if (clip) video.currentTime = clip.inicio; ajustarVideo(); });

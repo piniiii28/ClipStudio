@@ -8,6 +8,7 @@ trabajos se ejecutan de uno en uno para no saturar la CPU.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import queue
 import random
@@ -18,7 +19,7 @@ import traceback
 from pathlib import Path
 from typing import Callable
 
-from . import ajustes, config, cortes, db, fondos_remotos, importer, media, reframe, subtitles, suggest, transcribe
+from . import ajustes, config, cortes, db, fondos_remotos, importer, media, reframe, reframe_planos, subtitles, suggest, transcribe
 from .media import Cancelacion, Cancelado, ErrorMedia
 
 log = logging.getLogger("clipstudio")
@@ -172,7 +173,7 @@ class Gestor:
     que cancelar y volver a encolar el mismo id no confunde una ejecucion con otra."""
 
     def __init__(self) -> None:
-        self._colas = {"proyecto": queue.Queue(), "exportacion": queue.Queue()}
+        self._colas = {"proyecto": queue.Queue(), "exportacion": queue.Queue(), "analisis": queue.Queue()}
         self._cancelaciones: dict[str, Cancelacion] = {}
         self._ejecutando: set[str] = set()
         self._usos: dict[str, int] = {}          # proyecto -> trabajos que usan su carpeta ahora
@@ -267,8 +268,8 @@ class Gestor:
             borrar_archivos_proyecto(proyecto_id)
 
     def _bucle(self, tipo: str) -> None:
-        tabla = "proyectos" if tipo == "proyecto" else "exportaciones"
-        funcion = procesar_proyecto if tipo == "proyecto" else exportar
+        tabla = {"proyecto": "proyectos", "exportacion": "exportaciones", "analisis": "analisis"}[tipo]
+        funcion = {"proyecto": procesar_proyecto, "exportacion": exportar, "analisis": analizar_clip}[tipo]
         while True:
             entrada = self._colas[tipo].get()
             if entrada is None:
@@ -311,7 +312,7 @@ class Gestor:
             funcion(id_, cancel)
         except Cancelado:
             self._registrar(tabla, id_, estado="cancelado", error=None, **_extra(tabla, "Cancelado."))
-        except ErrorMedia as exc:
+        except (ErrorMedia, db.ConflictoRevision) as exc:
             self._registrar(tabla, id_, estado="error", error=str(exc))
         except Exception as exc:  # error inesperado: se registra y se muestra resumido
             log.error("Fallo inesperado en %s %s\n%s", tipo, id_, traceback.format_exc())
@@ -329,6 +330,41 @@ def _extra(tabla: str, mensaje: str) -> dict:
 
 
 gestor = Gestor()
+
+
+def analizar_clip(id_: str, cancel: Cancelacion) -> None:
+    trabajo = db.obtener("analisis", id_)
+    parametros = trabajo["parametros"]
+    fuente = ruta_proxy(trabajo["proyecto_id"])
+    stat = fuente.stat()
+    identidad = [2, stat.st_size, stat.st_mtime_ns, parametros["inicio"], parametros["fin"],
+                 reframe.MODELO_ROSTROS.stat().st_mtime_ns]
+    clave = hashlib.sha256(json.dumps(identidad).encode()).hexdigest()[:24]
+    carpeta = carpeta_proyecto(trabajo["proyecto_id"]) / "analisis"
+    checkpoint = carpeta / (clave + ".json")
+    db.actualizar("analisis", id_, mensaje="Detectando planos y siguiendo rostros…")
+    progreso = _Progreso("analisis", id_).tramo(0, 98)
+    resultado = reframe_planos.detectar(fuente, parametros["inicio"], parametros["fin"],
+                                       cancel=cancel, progreso=progreso, checkpoint=checkpoint)
+    cancel.comprobar()
+    # Una edición concurrente o un cambio de fuente invalida la publicación.
+    stat_final = fuente.stat()
+    if (stat_final.st_size, stat_final.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
+        raise ErrorMedia("El video cambió durante el análisis. Vuelve a analizar el clip.")
+    if resultado:
+        encuadre = "dividido" if parametros["encuadre"] == "dividido" else "rellenar"
+        db.editar_clip(trabajo["clip_id"], {"recorte_x": resultado["recorte_x"], "trayectoria": resultado["trayectoria"],
+                                          "encuadre": encuadre}, parametros["revision"])
+    db.actualizar("analisis", id_, estado="listo", progreso=100,
+                  mensaje="Seguimiento calculado" if resultado else "No se encontraron rostros suficientes",
+                  resultado={"detectado": bool(resultado), "planos": resultado["planos"] if resultado else 0})
+    # Mantener acotados los checkpoints antiguos del proyecto.
+    for antiguo in sorted(carpeta.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[20:]:
+        if antiguo != checkpoint:
+            try:
+                antiguo.unlink(missing_ok=True)
+            except OSError:
+                log.debug("No se pudo limpiar un checkpoint antiguo", exc_info=True)
 
 
 def _paso(proyecto_id: str, paso: str, mensaje: str, progreso: float) -> None:

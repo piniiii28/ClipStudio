@@ -24,10 +24,10 @@ def normalizar_composicion(datos: dict | None) -> dict:
     if modo not in ("mixto", "camara", "gameplay"):
         raise ValueError("Elige cámara, gameplay o cámara y gameplay.")
     salida = {"modo": modo}
-    for nombre in ("camara", "juego"):
+    for nombre in ("camara", "juego", "hud"):
         region = datos.get(nombre)
         if region is None:
-            salida[nombre] = None if nombre == "camara" else {"x": 0, "y": 0, "ancho": 1, "alto": 1}
+            salida[nombre] = {"x": 0, "y": 0, "ancho": 1, "alto": 1} if nombre == "juego" else None
             continue
         claves = ("x", "y", "ancho", "alto")
         if not isinstance(region, dict) or any(
@@ -43,6 +43,28 @@ def normalizar_composicion(datos: dict | None) -> dict:
     if not isinstance(proporcion, (int, float)) or not math.isfinite(proporcion) or not 20 <= proporcion <= 50:
         raise ValueError("La cámara debe ocupar entre el 20 y el 50 % del alto.")
     salida["camara_porcentaje"] = int(proporcion)
+    # Ampliar el recorte del juego hasta incluir la zona protegida.
+    hud, juego = salida["hud"], salida["juego"]
+    if hud:
+        x, y = min(hud["x"], juego["x"]), min(hud["y"], juego["y"])
+        derecha = max(hud["x"] + hud["ancho"], juego["x"] + juego["ancho"])
+        abajo = max(hud["y"] + hud["alto"], juego["y"] + juego["alto"])
+        salida["juego"] = {"x": x, "y": y, "ancho": derecha - x, "alto": abajo - y}
+    tramos = datos.get("tramos", [])
+    if not isinstance(tramos, list) or len(tramos) > 100:
+        raise ValueError("Admite hasta 100 intervalos de composición.")
+    normalizados = []
+    for tramo in tramos:
+        if not isinstance(tramo, dict) or tramo.get("modo") not in ("mixto", "camara", "gameplay"):
+            raise ValueError("Cada intervalo necesita una composición válida.")
+        a, b = tramo.get("inicio"), tramo.get("fin")
+        if any(isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) for t in (a, b)) or not 0 <= a < b:
+            raise ValueError("Los tiempos del intervalo deben ser finitos y crecientes.")
+        normalizados.append({"inicio": a, "fin": b, "modo": tramo["modo"]})
+    normalizados.sort(key=lambda t: t["inicio"])
+    if any(a["fin"] > b["inicio"] for a, b in zip(normalizados, normalizados[1:])):
+        raise ValueError("Los intervalos de composición no pueden solaparse.")
+    salida["tramos"] = normalizados
     return salida
 
 

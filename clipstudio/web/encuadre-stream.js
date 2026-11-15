@@ -12,7 +12,8 @@ export function crearSelectorStream({ h, fuente, composicion, alCambiar, alAutom
   const ayuda = h("p", { class: "tenue pequeno" });
   const camara = h("div", { class: "region-stream region-camara", hidden: true }, h("span", {}, "Cámara"));
   const juego = h("div", { class: "region-stream region-juego" }, h("span", {}, "Juego"));
-  const marco = h("div", { class: "selector-stream", "aria-label": "Seleccionar zonas del stream" }, fuente, juego, camara);
+  const hud = h("div", { class: "region-stream region-hud", hidden: true }, h("span", {}, "HUD"));
+  const marco = h("div", { class: "selector-stream", "aria-label": "Seleccionar zonas del stream" }, fuente, juego, camara, hud);
   const emitir = () => alCambiar(structuredClone(config));
   function dibujar(region, caja) {
     caja.hidden = !region;
@@ -21,6 +22,7 @@ export function crearSelectorStream({ h, fuente, composicion, alCambiar, alAutom
   function pintar() {
     dibujar(config.camara, camara);
     dibujar(config.juego, juego);
+    dibujar(config.hud, hud);
     modo.value = config.modo;
     proporcion.value = config.camara_porcentaje;
     valor.textContent = `${config.camara_porcentaje} %`;
@@ -36,7 +38,7 @@ export function crearSelectorStream({ h, fuente, composicion, alCambiar, alAutom
   proporcion.addEventListener("input", () => { config.camara_porcentaje = Number(proporcion.value); valor.textContent = `${proporcion.value} %`; emitir(); });
   function elegir(nombre) {
     destino = nombre;
-    ayuda.textContent = `Arrastra sobre la imagen para marcar ${nombre === "camara" ? "la cámara del creador" : "el gameplay"}.`;
+    ayuda.textContent = `Arrastra sobre la imagen para marcar ${nombre === "camara" ? "la cámara del creador" : nombre === "hud" ? "el HUD que quieres conservar en el gameplay" : "el gameplay"}.`;
   }
   function punto(evento) {
     const caja = marco.getBoundingClientRect();
@@ -55,7 +57,7 @@ export function crearSelectorStream({ h, fuente, composicion, alCambiar, alAutom
     arrastre = punto(evento);
   });
   marco.addEventListener("pointermove", (evento) => {
-    if (arrastre) dibujar(region(evento), destino === "camara" ? camara : juego);
+    if (arrastre) dibujar(region(evento), destino === "camara" ? camara : destino === "hud" ? hud : juego);
   });
   marco.addEventListener("pointerup", (evento) => {
     if (!arrastre) return;
@@ -63,6 +65,11 @@ export function crearSelectorStream({ h, fuente, composicion, alCambiar, alAutom
     arrastre = null;
     if (nueva.ancho < .02 || nueva.alto < .02) { pintar(); return; }
     config[destino] = nueva;
+    if (config.hud) {
+      const j = config.juego, z = config.hud;
+      const x = Math.min(j.x, z.x), y = Math.min(j.y, z.y);
+      config.juego = { x, y, ancho: Math.max(j.x + j.ancho, z.x + z.ancho) - x, alto: Math.max(j.y + j.alto, z.y + z.alto) - y };
+    }
     pintar(); emitir();
   });
   marco.addEventListener("pointercancel", () => { arrastre = null; pintar(); });
@@ -76,6 +83,10 @@ export function crearSelectorStream({ h, fuente, composicion, alCambiar, alAutom
         else { config.camara = null; pintar(); emitir(); }
       } }, textoAutomatico),
       h("button", { type: "button", onclick: () => { config.juego = { x: 0, y: 0, ancho: 1, alto: 1 }; pintar(); emitir(); } }, "Juego completo")),
+    h("div", { class: "fila" },
+      h("button", { type: "button", onclick: () => elegir("hud") }, "Proteger HUD"),
+      h("button", { type: "button", onclick: () => { config.hud = null; pintar(); emitir(); } }, "Quitar protección HUD")),
+    h("p", { class: "tenue pequeno" }, "El recorte del gameplay se amplía para conservar la zona HUD marcada."),
     ayuda, marco,
     h("label", { class: "campo" }, "Altura de la cámara ", valor, proporcion));
   actualizar(composicion);
@@ -85,6 +96,8 @@ export function crearSelectorStream({ h, fuente, composicion, alCambiar, alAutom
 export function dibujarStream(canvas, fuente, composicion) {
   if (!fuente.videoWidth || fuente.readyState < 2) return;
   const c = { modo: "mixto", camara: null, juego: { x: 0, y: 0, ancho: 1, alto: 1 }, camara_porcentaje: 30, ...composicion };
+  const tramo = (c.tramos || []).find(t => fuente.currentTime >= t.inicio && fuente.currentTime < t.fin);
+  if (tramo) c.modo = tramo.modo;
   const g = canvas.getContext("2d"), w = canvas.width, h = canvas.height;
   function dibujar(region, y, alto, ajustar = false, alineacion = .5) {
     const sx = region.x * fuente.videoWidth, sy = region.y * fuente.videoHeight;

@@ -199,3 +199,19 @@ Artifacts. Incluye SHA-256 y commit de origen; caduca a los 14 días.
 No publica releases ni cambia el canal estable. Valida el arranque, instalación y
 reinicio en Windows antes de publicar una versión nueva. Detalles de alcance y
 pruebas en [rondas-mejora.md](rondas-mejora.md).
+
+## Ayudas del editor
+
+- Usa **Sugerir títulos** bajo el título del clip para elegir una frase de sus subtítulos.
+- En **Subtítulos**, **Revisar legibilidad** muestra avisos y permite saltar al momento.
+- En **Proponer clips**, escribe palabras del tema y pulsa **Buscar por tema**. Cada
+  coincidencia permite crear un clip con las duraciones mínima y máxima seleccionadas.
+- **Deshacer** y **Rehacer** conservan las últimas 50 ediciones por clip. También funcionan
+  Ctrl+Z y Ctrl+Mayús+Z cuando el foco está fuera de un campo de texto.
+- **Seguir por planos** muestra progreso y permite cancelar. Si se interrumpe, pulsa
+  **Reintentar análisis** para reutilizar las tomas completadas.
+- En el encuadre **Stream**, abre **Composición por intervalos** e indica los tiempos del
+  video fuente y el modo. **Proteger HUD** permite marcar una zona que se incluirá en el
+  recorte del gameplay. La zona permanece incluida cuando se cambia el recorte del juego.
+- Si un guardado queda sin confirmar, al volver se ofrece recuperar o descartar el borrador.
+  Ante una edición concurrente, se carga primero la versión guardada y puedes reaplicar el borrador.

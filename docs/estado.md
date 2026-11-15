@@ -9,6 +9,27 @@ análisis y las propuestas iniciales se conservan como referencias históricas.
 
 ## Situación actual
 
+### Versión 0.4.0
+
+El editor incorpora sugerencias de títulos a partir del texto conservado, revisión de
+legibilidad y búsqueda de momentos por palabras del tema. Funcionan localmente.
+La revisión del ancho es aproximada y las propuestas de títulos son extractivas.
+
+El historial conserva hasta 50 cambios por clip, permite deshacer y rehacer entre
+reinicios y elimina la rama de rehacer al editar de nuevo. Las ediciones usan una revisión
+para detectar cambios concurrentes. Los borradores de guardados sin confirmar se pueden
+recuperar o descartar al volver al editor.
+
+Seguir por planos se ejecuta en una cola con progreso y cancelación. Al reintentar se
+reutilizan las tomas completadas para la misma fuente y rango. Los trabajos interrumpidos
+se muestran como recuperables al abrir. El resultado se aplica si el clip conserva la
+revisión analizada.
+
+El encuadre Stream admite hasta 100 intervalos sin solapamiento que alternan cámara,
+gameplay y mixto. Los tiempos corresponden al video fuente. La protección HUD amplía la
+región del juego para incluir la zona marcada. Las regiones se comparten entre intervalos.
+La vista previa y el MP4 utilizan las mismas decisiones de composición.
+
 ### Versión 0.3.5
 
 Corregido el cierre durante la actualización. La señal de instalación sobrevive al

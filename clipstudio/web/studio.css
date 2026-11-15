@@ -99,3 +99,16 @@ body.studio { background: var(--fondo); }
 @media (prefers-reduced-motion: reduce) {
   .studio *, .studio *::before, .studio *::after { transition: none !important; animation: none !important; }
 }
+
+.ayuda-editorial { margin: 10px 0; }
+.resultados-editoriales { display: grid; gap: 6px; max-height: 240px; overflow: auto; }
+.resultados-editoriales button { text-align: left; white-space: normal; }
+.propuesta-titulo { width: 100%; }
+.intervalos-stream { margin-top: 16px; }
+.intervalos-stream input { width: 100%; }
+.intervalos-stream > * { margin-bottom: 8px; }
+.estado-analisis:empty, .recuperacion:empty { display: none; }
+.estado-analisis, .recuperacion { padding: 10px; border: 1px solid var(--borde, #444); border-radius: 8px; margin: 8px 0; }
+.estado-analisis progress { width: 100%; accent-color: #a78bfa; }
+.region-hud { border-color: #c4b5fd; border-style: dashed; }
+.region-hud span { background: #6d28d9; }

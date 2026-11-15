@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import threading
 import tempfile
@@ -199,7 +200,29 @@ def crear_proxy(
     )
 
 
-def filtro_stream(composicion: dict | None, pista_video: int = 0) -> str:
+def filtro_stream(composicion: dict | None, pista_video: int = 0, inicio: float = 0) -> str:
+    c = reframe.normalizar_composicion(composicion)
+    modos = list(dict.fromkeys([c["modo"]] + [t["modo"] for t in c["tramos"]]))
+    if len(modos) == 1:
+        return _filtro_stream_fijo(c, pista_video)
+    etiquetas = "".join(f"[entrada{i}]" for i in range(len(modos)))
+    grafos = [f"[0:v:{pista_video}]split={len(modos)}{etiquetas}"]
+    for i, modo in enumerate(modos):
+        fijo = _filtro_stream_fijo({**c, "modo": modo}, pista_video)
+        fijo = fijo.replace(f"[0:v:{pista_video}]", f"[entrada{i}]")
+        fijo = re.sub(r"\[(?!entrada)(\w+)\]", lambda m: f"[{m[1]}_{i}]", fijo)
+        grafos.append(fijo)
+    anterior = "v0_0"
+    for i, modo in enumerate(modos[1:], 1):
+        condiciones = [f"gte(t,{t['inicio'] - inicio:.6f})*lt(t,{t['fin'] - inicio:.6f})"
+                       for t in c["tramos"] if t["modo"] == modo]
+        salida = "v0" if i == len(modos) - 1 else f"combinado{i}"
+        grafos.append(f"[{anterior}][v0_{i}]overlay=0:0:enable='{'+'.join(condiciones)}'[{salida}]")
+        anterior = salida
+    return ";".join(grafos)
+
+
+def _filtro_stream_fijo(composicion: dict | None, pista_video: int = 0) -> str:
     c = reframe.normalizar_composicion(composicion)
     w, h = config.OUT_W, config.OUT_H
 
@@ -253,7 +276,7 @@ def filtro_encuadre(
         centro = reframe.expresion_centro(trayectoria, inicio)
         posicion = f"'max(0,min(iw-{w},iw*({centro})-{w}/2))'"
     if encuadre == "stream":
-        grafo = filtro_stream(composicion, pista_video)
+        grafo = filtro_stream(composicion, pista_video, inicio)
     elif encuadre == "dividido":
         # Video del clip arriba y video de juego (entrada 1) abajo. Las alturas son pares.
         prop = max(25, min(60, int(proporcion_juego)))

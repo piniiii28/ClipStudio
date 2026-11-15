@@ -85,9 +85,33 @@ CREATE TABLE IF NOT EXISTS momentos_vivo (
 CREATE INDEX IF NOT EXISTS idx_momentos_sesion ON momentos_vivo(sesion_id);
 CREATE INDEX IF NOT EXISTS idx_clips_proyecto ON clips(proyecto_id);
 CREATE INDEX IF NOT EXISTS idx_exp_proyecto ON exportaciones(proyecto_id);
+CREATE TABLE IF NOT EXISTS historial_clips (
+    secuencia INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+    antes TEXT NOT NULL,
+    despues TEXT NOT NULL,
+    creado REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_historial_clip ON historial_clips(clip_id, secuencia);
+CREATE TABLE IF NOT EXISTS analisis (
+    id TEXT PRIMARY KEY,
+    proyecto_id TEXT NOT NULL REFERENCES proyectos(id) ON DELETE CASCADE,
+    clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+    parametros TEXT NOT NULL,
+    resultado TEXT,
+    estado TEXT NOT NULL,
+    progreso REAL NOT NULL DEFAULT 0,
+    mensaje TEXT,
+    error TEXT,
+    creado REAL NOT NULL,
+    actualizado REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_analisis_clip ON analisis(clip_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_analisis_activo ON analisis(clip_id)
+    WHERE estado IN ('en_cola', 'procesando');
 """
 
-JSON_FIELDS = {"subtitulos", "estilo", "motivos", "parametros", "cortes", "trayectoria", "composicion", "encuadre_vivo", "tiktok"}
+JSON_FIELDS = {"subtitulos", "estilo", "motivos", "parametros", "cortes", "trayectoria", "composicion", "encuadre_vivo", "tiktok", "antes", "despues", "resultado"}
 ACTIVOS = ("en_cola", "procesando")
 
 
@@ -107,7 +131,9 @@ def conectar() -> Iterator[sqlite3.Connection]:
 # Columnas anadidas despues de la primera version: se crean si faltan (bases ya existentes).
 COLUMNAS_NUEVAS = {
     "clips": {"cortes": "TEXT NOT NULL DEFAULT '[]'", "trayectoria": "TEXT NOT NULL DEFAULT '[]'",
-              "composicion": "TEXT NOT NULL DEFAULT '{}'", "tiktok": "TEXT NOT NULL DEFAULT '{}'"},
+              "composicion": "TEXT NOT NULL DEFAULT '{}'", "tiktok": "TEXT NOT NULL DEFAULT '{}'",
+              "revision": "INTEGER NOT NULL DEFAULT 0", "historial_pos": "INTEGER NOT NULL DEFAULT 0",
+              "historial_fin": "INTEGER NOT NULL DEFAULT 0"},
     "proyectos": {"min_s": "REAL NOT NULL DEFAULT 15", "max_s": "REAL NOT NULL DEFAULT 60",
                   "audio_idioma": "TEXT", "es_clip_vivo": "INTEGER NOT NULL DEFAULT 0", "encuadre_vivo": "TEXT NOT NULL DEFAULT '{}'"},
     "momentos_vivo": {"origen": "TEXT NOT NULL DEFAULT 'audio'", "error": "TEXT"},
@@ -177,11 +203,83 @@ def insertar(tabla: str, campos: dict[str, Any]) -> dict[str, Any]:
 def actualizar(tabla: str, id_: str, **campos: Any) -> None:
     if not campos:
         return
+    if tabla == "clips":
+        editar_clip(id_, campos)
+        return
     campos["actualizado"] = time.time()
     cod = _codificar(campos)
     asignaciones = ", ".join(f"{k} = ?" for k in cod)
     with conectar() as con:
         con.execute(f"UPDATE {tabla} SET {asignaciones} WHERE id = ?", [*cod.values(), id_])
+
+
+CAMPOS_EDICION = ("titulo", "inicio", "fin", "encuadre", "recorte_x", "subtitulos", "estilo",
+                  "cortes", "trayectoria", "composicion", "tiktok")
+
+
+class ConflictoRevision(Exception):
+    def __init__(self, revision: int):
+        self.revision = revision
+        super().__init__("El clip cambió en otra operación. Recarga la versión guardada antes de continuar.")
+
+
+def _escribir_clip(con: sqlite3.Connection, id_: str, campos: dict) -> None:
+    cod = _codificar(campos)
+    asignaciones = ", ".join(f"{k} = ?" for k in cod)
+    con.execute(f"UPDATE clips SET {asignaciones} WHERE id = ?", [*cod.values(), id_])
+
+
+def editar_clip(id_: str, campos: dict, revision: int | None = None) -> dict | None:
+    """Revisión e historial se confirman en la misma transacción que la edición."""
+    with conectar() as con:
+        con.execute("BEGIN IMMEDIATE")
+        anterior = _fila(con.execute("SELECT * FROM clips WHERE id = ?", (id_,)).fetchone())
+        if anterior is None:
+            return None
+        if revision is not None and revision != anterior["revision"]:
+            raise ConflictoRevision(anterior["revision"])
+        cambios = {k: v for k, v in campos.items() if anterior.get(k) != v}
+        if not cambios:
+            return anterior
+        if any(k in CAMPOS_EDICION for k in cambios):
+            antes = {k: anterior[k] for k in CAMPOS_EDICION}
+            despues = {**antes, **{k: v for k, v in cambios.items() if k in CAMPOS_EDICION}}
+            con.execute("DELETE FROM historial_clips WHERE clip_id = ? AND secuencia > ?",
+                        (id_, anterior["historial_pos"]))
+            cursor = con.execute("INSERT INTO historial_clips (clip_id, antes, despues, creado) VALUES (?, ?, ?, ?)",
+                                 (id_, json.dumps(antes, ensure_ascii=False), json.dumps(despues, ensure_ascii=False), time.time()))
+            cambios.update(historial_pos=cursor.lastrowid, historial_fin=cursor.lastrowid)
+            con.execute("DELETE FROM historial_clips WHERE clip_id = ? AND secuencia NOT IN "
+                        "(SELECT secuencia FROM historial_clips WHERE clip_id = ? ORDER BY secuencia DESC LIMIT 50)", (id_, id_))
+        cambios.update(revision=anterior["revision"] + 1, actualizado=time.time())
+        _escribir_clip(con, id_, cambios)
+        return _fila(con.execute("SELECT * FROM clips WHERE id = ?", (id_,)).fetchone())
+
+
+def mover_historial(id_: str, rehacer: bool, revision: int) -> dict | None:
+    with conectar() as con:
+        con.execute("BEGIN IMMEDIATE")
+        clip = _fila(con.execute("SELECT * FROM clips WHERE id = ?", (id_,)).fetchone())
+        if clip is None:
+            return None
+        if revision != clip["revision"]:
+            raise ConflictoRevision(clip["revision"])
+        if rehacer:
+            fila = con.execute("SELECT * FROM historial_clips WHERE clip_id = ? AND secuencia > ? ORDER BY secuencia LIMIT 1",
+                               (id_, clip["historial_pos"])).fetchone()
+        else:
+            fila = con.execute("SELECT * FROM historial_clips WHERE clip_id = ? AND secuencia = ?",
+                               (id_, clip["historial_pos"])).fetchone()
+        if fila is None:
+            return clip
+        posicion = fila["secuencia"]
+        if not rehacer:
+            posicion = con.execute("SELECT COALESCE(MAX(secuencia), 0) FROM historial_clips WHERE clip_id = ? AND secuencia < ?",
+                                   (id_, posicion)).fetchone()[0]
+        campos = json.loads(fila["despues"] if rehacer else fila["antes"])
+        campos.update(historial_pos=posicion, revision=clip["revision"] + 1, actualizado=time.time())
+        _escribir_clip(con, id_, campos)
+        return _fila(con.execute("SELECT * FROM clips WHERE id = ?", (id_,)).fetchone())
 
 
 def obtener(tabla: str, id_: str) -> dict[str, Any] | None:
@@ -213,7 +311,7 @@ def marcar_interrumpidos() -> None:
     msg = "El proceso se interrumpio porque la aplicacion se cerro. Puedes reintentarlo."
     ahora = time.time()
     with conectar() as con:
-        for tabla in ("proyectos", "exportaciones"):
+        for tabla in ("proyectos", "exportaciones", "analisis"):
             con.execute(
                 f"UPDATE {tabla} SET estado = 'error', error = ?, actualizado = ? WHERE estado IN (?, ?)",
                 (msg, ahora, *ACTIVOS),

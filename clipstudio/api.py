@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import youtube
-from . import entrega, media, vistas, reframe_planos
+from . import entrega, media, vistas, reframe_planos, editorial
 from . import __version__, actualizaciones, ajustes, config, cortes, db, fondos_remotos, hashtags, importer, pipeline, reframe, subtitles, suggest, vivo
 from .pipeline import gestor
 
@@ -48,6 +48,11 @@ async def _ciclo(_: FastAPI):
 
 
 app = FastAPI(title="ClipStudio", version=__version__, lifespan=_ciclo, docs_url=None, redoc_url=None)
+
+
+@app.exception_handler(db.ConflictoRevision)
+async def conflicto_revision(_request: Request, exc: db.ConflictoRevision):
+    return JSONResponse({"detail": str(exc), "revision": exc.revision}, status_code=409)
 
 
 @app.post("/api/escritorio/cerrar", status_code=204)
@@ -147,6 +152,7 @@ def _detalle(pid: str) -> dict:
         c["estilo"] = subtitles.normalizar_estilo(c["estilo"])
         c["cortes"] = c.get("cortes") or []
     p["exportaciones"] = db.listar("exportaciones", "proyecto_id = ?", (pid,))
+    p["analisis"] = db.listar("analisis", "proyecto_id = ?", (pid,))
     for e in p["exportaciones"]:
         e.pop("parametros", None)
     p["tiene_video"] = pipeline.ruta_proxy(pid).is_file()
@@ -323,6 +329,8 @@ def borrar_proyecto(pid: str) -> None:
         gestor.cancelar(pid)
         for e in db.listar("exportaciones", "proyecto_id = ?", (pid,)):
             gestor.cancelar(e["id"])
+        for a in db.listar("analisis", "proyecto_id = ?", (pid,)):
+            gestor.cancelar(a["id"])
         db.borrar("proyectos", pid)
     # Borra ahora, o cuando termine el ultimo trabajo que aun usa la carpeta. Como ultima
     # red, la limpieza de huerfanos al arrancar elimina lo que hubiera quedado.
@@ -571,6 +579,7 @@ def sugerir_hashtags(cid: str, datos: HashtagsSolicitud) -> dict:
 
 
 class ClipCambios(BaseModel):
+    revision: int | None = Field(None, ge=0)
     titulo: str | None = Field(None, max_length=120)
     inicio: float | None = Field(None, ge=0)
     fin: float | None = Field(None, gt=0)
@@ -638,8 +647,87 @@ def editar_clip(cid: str, datos: ClipCambios) -> dict:
     elif cambio_rango:
         segmentos = pipeline.leer_transcripcion(p["id"])["segmentos"]
         cambios["subtitulos"] = subtitles.sincronizar(clip["subtitulos"], segmentos, inicio, fin, estilo)
-    db.actualizar("clips", cid, **cambios)
+    if cambio_rango or "composicion" in cambios:
+        composicion = reframe.normalizar_composicion(cambios.get("composicion", clip.get("composicion")))
+        composicion["tramos"] = [{**t, "inicio": max(inicio, t["inicio"]), "fin": min(fin, t["fin"])}
+                                for t in composicion["tramos"] if t["fin"] > inicio and t["inicio"] < fin]
+        cambios["composicion"] = composicion
+    if datos.revision is None:
+        db.actualizar("clips", cid, **cambios)
+    else:
+        db.editar_clip(cid, cambios, datos.revision)
     return _clip(cid)
+
+
+class HistorialSolicitud(BaseModel):
+    revision: int = Field(ge=0)
+
+
+@app.post("/api/clips/{cid}/analisis-planos")
+def iniciar_analisis(cid: str) -> dict:
+    with _transicion:
+        clip = _clip(cid)
+        _proyecto_listo(clip["proyecto_id"])
+        activos = db.listar("analisis", "clip_id = ? AND estado IN ('en_cola', 'procesando')", (cid,))
+        if activos:
+            return activos[0]
+        trabajo = db.insertar("analisis", {"proyecto_id": clip["proyecto_id"], "clip_id": cid,
+                              "parametros": {k: clip[k] for k in ("inicio", "fin", "encuadre", "revision")},
+                              "estado": "en_cola", "progreso": 0, "mensaje": "Esperando análisis"})
+        gestor.encolar("analisis", trabajo["id"])
+        return trabajo
+
+
+@app.post("/api/analisis/{aid}/cancelar")
+def cancelar_analisis(aid: str) -> dict:
+    with _transicion:
+        trabajo = db.obtener("analisis", aid)
+        if trabajo is None:
+            raise HTTPException(404, "Análisis no encontrado.")
+        if trabajo["estado"] in db.ACTIVOS and gestor.cancelar(aid) != "ejecutando":
+            db.actualizar("analisis", aid, estado="cancelado", mensaje="Cancelado")
+        return db.obtener("analisis", aid)
+
+
+@app.get("/api/clips/{cid}")
+def ver_clip(cid: str) -> dict:
+    return _clip(cid)
+
+
+@app.post("/api/clips/{cid}/historial/{accion}")
+def historial_clip(cid: str, accion: Literal["deshacer", "rehacer"], datos: HistorialSolicitud) -> dict:
+    _clip(cid)
+    db.mover_historial(cid, accion == "rehacer", datos.revision)
+    return _clip(cid)
+
+
+@app.get("/api/clips/{cid}/titulos")
+def titulos_clip(cid: str) -> dict:
+    clip = _clip(cid)
+    transcripcion = pipeline.leer_transcripcion(clip["proyecto_id"])
+    return {"sugerencias": editorial.titulos(clip, transcripcion["segmentos"]),
+            "metodo": "Frases del texto conservado, con prioridad para preguntas y términos repetidos"}
+
+
+@app.get("/api/clips/{cid}/subtitulos/revision")
+def revision_subtitulos(cid: str) -> dict:
+    return {"avisos": editorial.revisar_subtitulos(_clip(cid))}
+
+
+class TemaSolicitud(BaseModel):
+    tema: str = Field(min_length=2, max_length=150)
+    min_s: float = Field(15, ge=3, le=300)
+    max_s: float = Field(60, ge=5, le=600)
+
+
+@app.post("/api/proyectos/{pid}/buscar-tema")
+def buscar_por_tema(pid: str, datos: TemaSolicitud) -> dict:
+    p = _proyecto_listo(pid)
+    if datos.max_s <= datos.min_s:
+        raise HTTPException(422, "La duración máxima debe ser mayor que la mínima.")
+    t = pipeline.leer_transcripcion(pid)
+    return {"candidatos": editorial.buscar_tema(t["segmentos"], p["duracion"], datos.tema, datos.min_s, datos.max_s),
+            "metodo": "Coincidencias de palabras del tema en la transcripción"}
 
 
 class QuitarSilencios(BaseModel):
@@ -664,6 +752,8 @@ def quitar_silencios(cid: str, datos: QuitarSilencios = QuitarSilencios()) -> di
 @app.delete("/api/clips/{cid}", status_code=204)
 def borrar_clip(cid: str) -> None:
     _clip(cid)
+    for trabajo in db.listar("analisis", "clip_id = ?", (cid,)):
+        gestor.cancelar(trabajo["id"])
     db.borrar("clips", cid)
 
 
