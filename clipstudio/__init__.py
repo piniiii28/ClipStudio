@@ -1,3 +1,3 @@
 """ClipStudio: videos largos a clips verticales, en local."""
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
